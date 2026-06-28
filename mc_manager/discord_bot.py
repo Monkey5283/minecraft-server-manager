@@ -11,6 +11,13 @@ from .config import ControllerConfig, RemoteServer
 
 
 LOG = logging.getLogger("mc_manager.discord")
+STATUS_ICONS = {
+    "online": "🟢",
+    "offline": "🔴",
+    "busy": "🟡",
+    "unreachable": "⚫",
+    "unknown": "⚪",
+}
 
 
 class MinecraftDiscordBot(discord.Client):
@@ -170,12 +177,46 @@ class MinecraftDiscordBot(discord.Client):
             await channel.send(
                 "🟢 **Minecraft Manager is online.** "
                 "The Raspberry Pi controller is connected and ready.\n"
-                "Did you miss me?"
+                "Did you miss me?",
+                allowed_mentions=discord.AllowedMentions.none(),
             )
             self._online_announced = True
             LOG.info("Online announcement sent to Discord channel %s", channel_id)
+            await self._send_startup_server_status(channel)
         except (discord.DiscordException, TypeError):
             LOG.exception(
                 "Could not send the online announcement to Discord channel %s",
                 channel_id,
             )
+
+    async def _send_startup_server_status(
+        self, channel: discord.abc.Messageable
+    ) -> None:
+        if not self.config.servers:
+            return
+        lines = await asyncio.gather(
+            *(self._startup_status_line(server) for server in self.config.servers)
+        )
+        message = "**Minecraft server status**\n" + "\n".join(lines)
+        if len(message) > 1900:
+            message = message[:1897] + "..."
+        try:
+            await channel.send(
+                message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            LOG.info("Startup status announced for %s server(s)", len(lines))
+        except discord.DiscordException:
+            LOG.exception("Could not send the startup server status announcement")
+
+    async def _startup_status_line(self, server: RemoteServer) -> str:
+        try:
+            result = await self.agents.status(server)
+            state = str(result.get("state", "unknown")).lower()
+        except AgentUnavailable:
+            state = "unreachable"
+        except Exception:
+            LOG.exception("Unexpected status error for %s during startup", server.id)
+            state = "unknown"
+        icon = STATUS_ICONS.get(state, STATUS_ICONS["unknown"])
+        return f"{icon} **{server.name}** — {state}"
