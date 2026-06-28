@@ -1,6 +1,6 @@
 [controller]
-# The web dashboard will be available at http://PI_ADDRESS:8080
-bind = "0.0.0.0"
+# Keep the dashboard local to the Pi. Tailscale Serve exposes it privately.
+bind = "127.0.0.1"
 port = 8080
 
 [auth]
