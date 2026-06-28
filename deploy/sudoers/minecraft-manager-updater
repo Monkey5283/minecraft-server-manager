@@ -1,0 +1,4 @@
+# Replace "mcdeploy" with the SSH account named in /etc/minecraft-manager/fleet.
+# The updater installs trusted code from REPOSITORY_URL as root, so protect that
+# repository and require reviewed changes on its update branch.
+mcdeploy ALL=(root) NOPASSWD: /usr/local/sbin/update-minecraft-manager

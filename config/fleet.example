@@ -1,0 +1,4 @@
+# One SSH destination per Ubuntu Minecraft host. Blank lines and comments are
+# ignored. Use a dedicated account with an SSH key.
+mcdeploy@192.168.1.31
+mcdeploy@192.168.1.32

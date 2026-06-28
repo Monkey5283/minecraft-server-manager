@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $EUID -eq 0 ]] || {
+  echo "run this updater as root" >&2
+  exit 1
+}
+
+settings="/etc/minecraft-manager/update.env"
+[[ -r "$settings" ]] || {
+  echo "missing updater configuration: $settings" >&2
+  exit 1
+}
+# This file is created root-owned and mode 0600 by the bootstrap script.
+source "$settings"
+
+: "${ROLE:?ROLE is required}"
+: "${REPOSITORY_URL:?REPOSITORY_URL is required}"
+: "${BRANCH:?BRANCH is required}"
+: "${SOURCE_DIR:?SOURCE_DIR is required}"
+: "${VENV_DIR:?VENV_DIR is required}"
+[[ "$ROLE" == "controller" || "$ROLE" == "agent" ]] || {
+  echo "ROLE must be controller or agent" >&2
+  exit 2
+}
+[[ "$SOURCE_DIR" == /opt/minecraft-manager/* ]] || {
+  echo "SOURCE_DIR must be below /opt/minecraft-manager" >&2
+  exit 2
+}
+[[ "$VENV_DIR" == /opt/minecraft-manager/* ]] || {
+  echo "VENV_DIR must be below /opt/minecraft-manager" >&2
+  exit 2
+}
+
+exec 9>/run/lock/minecraft-manager-update.lock
+if ! flock --nonblock 9; then
+  echo "another Minecraft Manager update is already running" >&2
+  exit 1
+fi
+
+service_name="mc-manager-${ROLE}.service"
+git_as_manager=(sudo -u mcmanager git -C "$SOURCE_DIR")
+python_as_manager=(sudo -u mcmanager "$VENV_DIR/bin/python")
+previous_commit="$("${git_as_manager[@]}" rev-parse HEAD)"
+"${git_as_manager[@]}" remote set-url origin "$REPOSITORY_URL"
+"${git_as_manager[@]}" fetch --prune origin "$BRANCH"
+target_commit="$("${git_as_manager[@]}" rev-parse "origin/${BRANCH}")"
+
+if [[ "$previous_commit" == "$target_commit" && "${1:-}" != "--force" ]]; then
+  echo "Minecraft Manager is already current (${target_commit:0:12})."
+  exit 0
+fi
+
+rollback() {
+  echo "update failed; rolling back to ${previous_commit:0:12}" >&2
+  "${git_as_manager[@]}" reset --hard "$previous_commit"
+  "${python_as_manager[@]}" -m pip install --quiet --upgrade "$SOURCE_DIR"
+  install -m 0644 \
+    "$SOURCE_DIR/deploy/systemd/${service_name}" \
+    "/etc/systemd/system/${service_name}"
+  systemctl daemon-reload
+  systemctl restart "$service_name"
+}
+trap rollback ERR
+
+"${git_as_manager[@]}" reset --hard "$target_commit"
+"${python_as_manager[@]}" -m pip install --upgrade "$SOURCE_DIR"
+install -m 0755 "$SOURCE_DIR/deploy/scripts/update-minecraft-manager" \
+  /usr/local/sbin/update-minecraft-manager
+install -m 0644 \
+  "$SOURCE_DIR/deploy/systemd/${service_name}" \
+  "/etc/systemd/system/${service_name}"
+
+if [[ "$ROLE" == "controller" ]]; then
+  install -m 0755 "$SOURCE_DIR/deploy/scripts/update-minecraft-manager-fleet" \
+    /usr/local/bin/update-minecraft-manager-fleet
+else
+  install -m 0755 "$SOURCE_DIR/deploy/scripts/update-minecraft-jar" \
+    /usr/local/sbin/update-minecraft-jar
+  install -m 0755 "$SOURCE_DIR/deploy/scripts/backup-minecraft" \
+    /usr/local/sbin/backup-minecraft
+fi
+
+systemctl daemon-reload
+systemctl restart "$service_name"
+
+healthy_checks=0
+for _ in {1..30}; do
+  if systemctl is-active --quiet "$service_name"; then
+    healthy_checks=$((healthy_checks + 1))
+    if (( healthy_checks >= 3 )); then
+      trap - ERR
+      echo "Updated Minecraft Manager to ${target_commit:0:12}; configuration preserved."
+      exit 0
+    fi
+  else
+    healthy_checks=0
+  fi
+  sleep 1
+done
+
+echo "${service_name} did not become active" >&2
+false

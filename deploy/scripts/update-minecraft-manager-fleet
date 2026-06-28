@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+fleet_file="${MC_MANAGER_FLEET_FILE:-/etc/minecraft-manager/fleet}"
+[[ -r "$fleet_file" ]] || {
+  echo "missing fleet file: $fleet_file" >&2
+  exit 1
+}
+
+failures=0
+while IFS= read -r target || [[ -n "$target" ]]; do
+  target="${target%%#*}"
+  target="${target//[[:space:]]/}"
+  [[ -n "$target" ]] || continue
+  if [[ ! "$target" =~ ^[A-Za-z0-9][A-Za-z0-9_.:@-]*$ ]]; then
+    echo "skipping invalid SSH target: $target" >&2
+    failures=$((failures + 1))
+    continue
+  fi
+  echo "Updating agent on ${target}..."
+  if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" \
+    sudo --non-interactive /usr/local/sbin/update-minecraft-manager; then
+    echo "Agent update failed on ${target}" >&2
+    failures=$((failures + 1))
+  fi
+done <"$fleet_file"
+
+echo "Updating the controller on this Raspberry Pi..."
+if ! sudo /usr/local/sbin/update-minecraft-manager; then
+  failures=$((failures + 1))
+fi
+
+if (( failures > 0 )); then
+  echo "${failures} machine(s) failed to update." >&2
+  exit 1
+fi
+echo "Every Minecraft Manager machine is up to date."

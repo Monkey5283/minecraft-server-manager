@@ -1,0 +1,23 @@
+[Unit]
+Description=Minecraft Manager host agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcmanager
+Group=mcmanager
+WorkingDirectory=/opt/minecraft-manager/source
+EnvironmentFile=/etc/minecraft-manager/agent.env
+Environment=MC_AGENT_CONFIG=/etc/minecraft-manager/agent.toml
+ExecStart=/opt/minecraft-manager/venv/bin/mc-manager-agent
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=-/srv/minecraft
+ReadWritePaths=-/srv/minecraft-backups
+
+[Install]
+WantedBy=multi-user.target

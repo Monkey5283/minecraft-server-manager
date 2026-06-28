@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 || ! "$1" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]]; then
+  echo "usage: update-minecraft-jar SERVER_ID" >&2
+  exit 2
+fi
+
+server_id="$1"
+server_dir="/srv/minecraft/${server_id}"
+settings="/etc/minecraft/${server_id}-update.env"
+service="minecraft@${server_id}.service"
+
+if [[ ! -f "$settings" ]]; then
+  echo "missing update settings: $settings" >&2
+  exit 1
+fi
+
+# Expected values:
+# DOWNLOAD_URL=https://provider.example/server.jar
+# SHA256=full-lowercase-sha256
+source "$settings"
+: "${DOWNLOAD_URL:?DOWNLOAD_URL is required}"
+: "${SHA256:?SHA256 is required}"
+if [[ ! "$DOWNLOAD_URL" =~ ^https?:// ]] || [[ ! "$SHA256" =~ ^[a-fA-F0-9]{64}$ ]]; then
+  echo "DOWNLOAD_URL or SHA256 has an invalid format" >&2
+  exit 1
+fi
+
+tmp="$(mktemp)"
+backup="${server_dir}/server.jar.pre-update"
+trap 'rm -f "$tmp"' EXIT
+
+curl --fail --location --silent --show-error --output "$tmp" -- "$DOWNLOAD_URL"
+echo "${SHA256}  ${tmp}" | sha256sum --check -
+jar --list --file "$tmp" >/dev/null
+
+systemctl stop "$service"
+cp --preserve=mode,ownership,timestamps "${server_dir}/server.jar" "$backup"
+install --owner=minecraft --group=minecraft --mode=0644 "$tmp" "${server_dir}/server.jar"
+
+if ! systemctl start "$service"; then
+  echo "new server failed to start; restoring previous jar" >&2
+  install --owner=minecraft --group=minecraft --mode=0644 "$backup" "${server_dir}/server.jar"
+  systemctl start "$service"
+  exit 1
+fi
+
+echo "updated ${server_id}; previous jar saved as ${backup}"

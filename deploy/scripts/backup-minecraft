@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 || ! "$1" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]]; then
+  echo "usage: backup-minecraft SERVER_ID" >&2
+  exit 2
+fi
+
+server_id="$1"
+server_dir="/srv/minecraft/${server_id}"
+backup_dir="/srv/minecraft-backups/${server_id}"
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+
+install -d --owner=minecraft --group=minecraft --mode=0750 "$backup_dir"
+tar --create --gzip \
+  --file="${backup_dir}/${server_id}-${timestamp}.tar.gz" \
+  --directory="$server_dir" \
+  --exclude="*.jar" \
+  --exclude="logs" \
+  world world_nether world_the_end server.properties whitelist.json ops.json
+
+find "$backup_dir" -type f -name '*.tar.gz' -mtime +14 -delete
+echo "backup created: ${backup_dir}/${server_id}-${timestamp}.tar.gz"

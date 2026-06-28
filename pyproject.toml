@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lan-minecraft-manager"
+version = "0.1.0"
+description = "Discord and web control plane for Minecraft servers on a local network"
+requires-python = ">=3.11"
+dependencies = [
+    "discord.py>=2.4,<3",
+    "fastapi>=0.115,<1",
+    "httpx>=0.27,<1",
+    "itsdangerous>=2.2,<3",
+    "uvicorn[standard]>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.24,<1",
+]
+
+[project.scripts]
+mc-manager-controller = "mc_manager.controller:main"
+mc-manager-agent = "mc_manager.agent:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["mc_manager*"]
+
+[tool.setuptools.package-data]
+mc_manager = ["static/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

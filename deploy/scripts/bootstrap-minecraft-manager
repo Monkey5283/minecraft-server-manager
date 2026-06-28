@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: sudo bootstrap-minecraft-manager ROLE REPOSITORY_URL [BRANCH]" >&2
+  echo "ROLE must be controller or agent" >&2
+  exit 2
+}
+
+[[ $EUID -eq 0 ]] || {
+  echo "run this installer as root" >&2
+  exit 1
+}
+
+[[ $# -ge 2 && $# -le 3 ]] || usage
+role="$1"
+repository_url="$2"
+branch="${3:-main}"
+[[ "$role" == "controller" || "$role" == "agent" ]] || usage
+[[ "$repository_url" =~ ^https://[^[:space:]]+$ || "$repository_url" =~ ^ssh://[^[:space:]]+$ || "$repository_url" =~ ^git@[^[:space:]]+:[^[:space:]]+$ ]] || {
+  echo "repository URL must use HTTPS or SSH" >&2
+  exit 2
+}
+[[ "$branch" =~ ^[A-Za-z0-9._/-]+$ ]] || {
+  echo "invalid branch name" >&2
+  exit 2
+}
+
+install_root="/opt/minecraft-manager"
+source_dir="${install_root}/source"
+venv_dir="${install_root}/venv"
+config_dir="/etc/minecraft-manager"
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install --yes git python3 python3-venv
+
+if ! getent passwd mcmanager >/dev/null; then
+  useradd --system --create-home --shell /usr/sbin/nologin mcmanager
+fi
+install -d --owner=mcmanager --group=mcmanager --mode=0755 "$install_root"
+install -d --owner=root --group=mcmanager --mode=0750 "$config_dir"
+
+if [[ -d "${source_dir}/.git" ]]; then
+  sudo -u mcmanager git -C "$source_dir" fetch --prune origin "$branch"
+  sudo -u mcmanager git -C "$source_dir" checkout --force -B "$branch" "origin/${branch}"
+else
+  if [[ -e "$source_dir" ]]; then
+    echo "${source_dir} exists but is not a Git checkout; refusing to replace it" >&2
+    exit 1
+  fi
+  sudo -u mcmanager git clone --branch "$branch" --single-branch \
+    "$repository_url" "$source_dir"
+fi
+
+if [[ ! -x "${venv_dir}/bin/python" ]]; then
+  sudo -u mcmanager python3 -m venv "$venv_dir"
+fi
+sudo -u mcmanager "${venv_dir}/bin/python" -m pip install --upgrade pip
+sudo -u mcmanager "${venv_dir}/bin/python" -m pip install --upgrade "$source_dir"
+
+if [[ ! -e "${config_dir}/update.env" ]]; then
+  {
+    printf 'ROLE=%q\n' "$role"
+    printf 'REPOSITORY_URL=%q\n' "$repository_url"
+    printf 'BRANCH=%q\n' "$branch"
+    printf 'SOURCE_DIR=%q\n' "$source_dir"
+    printf 'VENV_DIR=%q\n' "$venv_dir"
+  } >"${config_dir}/update.env"
+fi
+chown root:root "${config_dir}/update.env"
+chmod 0600 "${config_dir}/update.env"
+
+install -m 0755 "${source_dir}/deploy/scripts/update-minecraft-manager" \
+  /usr/local/sbin/update-minecraft-manager
+
+if [[ "$role" == "controller" ]]; then
+  if [[ ! -e "${config_dir}/controller.toml" ]]; then
+    install -o root -g mcmanager -m 0640 \
+      "${source_dir}/config/controller.example.toml" \
+      "${config_dir}/controller.toml"
+  fi
+  if [[ ! -e "${config_dir}/controller.env" ]]; then
+    install -o root -g mcmanager -m 0640 \
+      "${source_dir}/config/controller.env.example" \
+      "${config_dir}/controller.env"
+  fi
+  install -m 0644 "${source_dir}/deploy/systemd/mc-manager-controller.service" \
+    /etc/systemd/system/mc-manager-controller.service
+  install -m 0755 "${source_dir}/deploy/scripts/update-minecraft-manager-fleet" \
+    /usr/local/bin/update-minecraft-manager-fleet
+  if [[ ! -e "${config_dir}/fleet" ]]; then
+    install -o root -g mcmanager -m 0640 \
+      "${source_dir}/config/fleet.example" "${config_dir}/fleet"
+  fi
+  service_name="mc-manager-controller.service"
+else
+  if [[ ! -e "${config_dir}/agent.toml" ]]; then
+    install -o root -g mcmanager -m 0640 \
+      "${source_dir}/config/agent.linux.example.toml" \
+      "${config_dir}/agent.toml"
+  fi
+  if [[ ! -e "${config_dir}/agent.env" ]]; then
+    install -o root -g mcmanager -m 0640 \
+      "${source_dir}/config/agent.env.example" \
+      "${config_dir}/agent.env"
+  fi
+  install -m 0644 "${source_dir}/deploy/systemd/mc-manager-agent.service" \
+    /etc/systemd/system/mc-manager-agent.service
+  install -m 0755 "${source_dir}/deploy/scripts/update-minecraft-jar" \
+    /usr/local/sbin/update-minecraft-jar
+  install -m 0755 "${source_dir}/deploy/scripts/backup-minecraft" \
+    /usr/local/sbin/backup-minecraft
+  service_name="mc-manager-agent.service"
+fi
+
+systemctl daemon-reload
+systemctl enable "$service_name"
+
+echo
+echo "Installed ${role} files. Existing configuration was not overwritten."
+echo "Edit the files in ${config_dir}, then start with:"
+echo "  sudo systemctl restart ${service_name}"

@@ -1,0 +1,26 @@
+[agent]
+name = "minecraft-host-1"
+bind = "0.0.0.0"
+port = 8766
+token_env = "MC_AGENT_TOKEN"
+
+[[servers]]
+id = "survival"
+name = "Survival"
+working_directory = "/srv/minecraft/survival"
+timeout_seconds = 120
+update_timeout_seconds = 1800
+
+# Every entry is an argv array (or a list of argv arrays). No shell is used.
+[servers.actions]
+start = [["sudo", "/usr/bin/systemctl", "start", "minecraft@survival.service"]]
+stop = [["sudo", "/usr/bin/systemctl", "stop", "minecraft@survival.service"]]
+restart = [["sudo", "/usr/bin/systemctl", "restart", "minecraft@survival.service"]]
+status = [["/usr/bin/systemctl", "is-active", "--quiet", "minecraft@survival.service"]]
+update = [["sudo", "/usr/local/sbin/update-minecraft-jar", "survival"]]
+
+# Script names become choices in Discord and the web UI.
+[servers.scripts]
+backup = [["sudo", "/usr/local/sbin/backup-minecraft", "survival"]]
+
+# Add another [[servers]] block when one machine hosts multiple servers.

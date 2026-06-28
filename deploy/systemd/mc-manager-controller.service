@@ -1,0 +1,22 @@
+[Unit]
+Description=Minecraft Manager controller and Discord bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcmanager
+Group=mcmanager
+WorkingDirectory=/opt/minecraft-manager/source
+EnvironmentFile=/etc/minecraft-manager/controller.env
+Environment=MC_CONTROLLER_CONFIG=/etc/minecraft-manager/controller.toml
+ExecStart=/opt/minecraft-manager/venv/bin/mc-manager-controller
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

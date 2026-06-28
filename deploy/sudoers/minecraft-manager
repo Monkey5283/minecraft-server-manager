@@ -1,0 +1,8 @@
+# Install as /etc/sudoers.d/minecraft-manager and validate with visudo -cf.
+# Restrict mcmanager to only the exact lifecycle and maintenance commands used
+# in agent.toml. Add one line per server ID.
+mcmanager ALL=(root) NOPASSWD: /usr/bin/systemctl start minecraft@survival.service
+mcmanager ALL=(root) NOPASSWD: /usr/bin/systemctl stop minecraft@survival.service
+mcmanager ALL=(root) NOPASSWD: /usr/bin/systemctl restart minecraft@survival.service
+mcmanager ALL=(root) NOPASSWD: /usr/local/sbin/update-minecraft-jar survival
+mcmanager ALL=(root) NOPASSWD: /usr/local/sbin/backup-minecraft survival

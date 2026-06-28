@@ -1,0 +1,5 @@
+* text=auto
+*.sh text eol=lf
+deploy/scripts/* text eol=lf
+deploy/systemd/* text eol=lf
+deploy/sudoers/* text eol=lf

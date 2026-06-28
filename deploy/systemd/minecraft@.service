@@ -1,0 +1,19 @@
+[Unit]
+Description=Minecraft server %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=minecraft
+Group=minecraft
+WorkingDirectory=/srv/minecraft/%i
+EnvironmentFile=-/etc/minecraft/%i.env
+ExecStart=/usr/bin/java -Xms${JAVA_MIN_MEMORY} -Xmx${JAVA_MAX_MEMORY} -jar server.jar nogui
+SuccessExitStatus=0 143
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

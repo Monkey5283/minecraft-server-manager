@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Minecraft Server Control</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div>
+          <p class="eyebrow">LOCAL NETWORK CONTROL</p>
+          <h1>Minecraft servers</h1>
+        </div>
+        <div class="header-actions">
+          <span id="last-updated"></span>
+          <button id="refresh" class="secondary" hidden>Refresh</button>
+          <button id="logout" class="secondary" hidden>Sign out</button>
+        </div>
+      </header>
+
+      <main>
+        <section id="login-panel" class="login-card" hidden>
+          <p class="eyebrow">AUTHORIZATION REQUIRED</p>
+          <h2>Sign in</h2>
+          <form id="login-form">
+            <label>Username<input id="username" autocomplete="username" required /></label>
+            <label>Password<input id="password" type="password" autocomplete="current-password" required /></label>
+            <button type="submit">Open control panel</button>
+          </form>
+          <p id="login-error" class="error"></p>
+        </section>
+
+        <section id="dashboard" hidden>
+          <div id="notice" class="notice" hidden></div>
+          <div id="servers" class="server-grid"></div>
+        </section>
+      </main>
+    </div>
+
+    <template id="server-template">
+      <article class="server-card">
+        <div class="server-heading">
+          <div>
+            <p class="server-id"></p>
+            <h2 class="server-name"></h2>
+          </div>
+          <span class="state"></span>
+        </div>
+        <p class="detail"></p>
+        <div class="actions"></div>
+        <div class="scripts" hidden>
+          <label>
+            Maintenance script
+            <select></select>
+          </label>
+          <button class="run-script secondary">Run script</button>
+        </div>
+        <div class="job" hidden>
+          <span class="spinner"></span>
+          <span class="job-text"></span>
+        </div>
+      </article>
+    </template>
+  </body>
+</html>
