@@ -73,3 +73,32 @@ token_env = "AGENT"
     )
     with pytest.raises(ConfigError, match="agent_url"):
         load_controller_config(config)
+
+
+def test_controller_loads_announcement_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    for name in ("WEB", "SESSION", "DISCORD", "AGENT"):
+        monkeypatch.setenv(name, "secret")
+    config = tmp_path / "controller.toml"
+    config.write_text(
+        """
+[auth]
+web_password_env = "WEB"
+session_secret_env = "SESSION"
+[discord]
+discord_token_env = "DISCORD"
+guild_id = 123
+announcement_channel_id = 456
+[[servers]]
+id = "survival"
+agent_url = "http://192.168.1.20:8766"
+token_env = "AGENT"
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_controller_config(config)
+
+    assert loaded.discord_guild_id == 123
+    assert loaded.announcement_channel_id == 456

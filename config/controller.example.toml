@@ -14,6 +14,8 @@ cookie_secure = false
 discord_token_env = "DISCORD_BOT_TOKEN"
 # Using one guild makes new slash commands appear quickly during setup.
 guild_id = 123456789012345678
+# Optional: post once here whenever the controller process comes online.
+announcement_channel_id = 123456789012345678
 # A Discord administrator is always permitted. These lists grant other access.
 allowed_user_ids = [123456789012345678]
 allowed_role_ids = [123456789012345678]

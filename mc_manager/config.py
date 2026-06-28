@@ -96,6 +96,7 @@ class ControllerConfig:
     cookie_secure: bool
     discord_token: str
     discord_guild_id: int | None
+    announcement_channel_id: int | None
     allowed_user_ids: frozenset[int] = field(default_factory=frozenset)
     allowed_role_ids: frozenset[int] = field(default_factory=frozenset)
     servers: tuple[RemoteServer, ...] = ()
@@ -185,6 +186,7 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
         raise ConfigError("At least one [[servers]] entry is required")
 
     guild_id = int(discord.get("guild_id", 0)) or None
+    announcement_channel_id = int(discord.get("announcement_channel_id", 0)) or None
     return ControllerConfig(
         bind=str(controller.get("bind", "0.0.0.0")),
         port=int(controller.get("port", 8080)),
@@ -195,9 +197,10 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
         ),
         cookie_secure=bool(auth.get("cookie_secure", False)),
         discord_token=_required_env(
-            str(auth.get("discord_token_env", "DISCORD_BOT_TOKEN"))
+            str(discord.get("discord_token_env", "DISCORD_BOT_TOKEN"))
         ),
         discord_guild_id=guild_id,
+        announcement_channel_id=announcement_channel_id,
         allowed_user_ids=frozenset(int(item) for item in discord.get("allowed_user_ids", [])),
         allowed_role_ids=frozenset(int(item) for item in discord.get("allowed_role_ids", [])),
         servers=tuple(servers),

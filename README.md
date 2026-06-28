@@ -49,6 +49,11 @@ For every Minecraft server, set:
 
 Remove example server entries you do not need.
 
+Under `[discord]`, set `announcement_channel_id` to the Discord text channel
+that should receive a message whenever the controller comes online. Enable
+Discord Developer Mode, right-click the channel, and choose **Copy Channel ID**.
+Set it to `0` to disable announcements.
+
 Then open the secret file:
 
 ```bash

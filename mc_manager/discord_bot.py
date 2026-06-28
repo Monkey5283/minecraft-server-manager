@@ -20,6 +20,7 @@ class MinecraftDiscordBot(discord.Client):
         self.config = config
         self.agents = agents
         self.servers = {server.id: server for server in config.servers}
+        self._online_announced = False
         self.tree = app_commands.CommandTree(self)
         self._register_commands()
 
@@ -156,3 +157,24 @@ class MinecraftDiscordBot(discord.Client):
         else:
             await self.tree.sync()
             LOG.info("Discord commands synced globally")
+
+    async def on_ready(self) -> None:
+        LOG.info("Discord connected as %s", self.user)
+        channel_id = self.config.announcement_channel_id
+        if not channel_id or self._online_announced:
+            return
+        try:
+            channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
+            if not hasattr(channel, "send"):
+                raise TypeError("configured channel does not support messages")
+            await channel.send(
+                "🟢 **Minecraft Manager is online.** "
+                "The Raspberry Pi controller is connected and ready."
+            )
+            self._online_announced = True
+            LOG.info("Online announcement sent to Discord channel %s", channel_id)
+        except (discord.DiscordException, TypeError):
+            LOG.exception(
+                "Could not send the online announcement to Discord channel %s",
+                channel_id,
+            )
