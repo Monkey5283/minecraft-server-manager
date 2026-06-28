@@ -169,7 +169,8 @@ class MinecraftDiscordBot(discord.Client):
                 raise TypeError("configured channel does not support messages")
             await channel.send(
                 "🟢 **Minecraft Manager is online.** "
-                "The Raspberry Pi controller is connected and ready."
+                "The Raspberry Pi controller is connected and ready.\n"
+                "Did you miss me?"
             )
             self._online_announced = True
             LOG.info("Online announcement sent to Discord channel %s", channel_id)

@@ -25,3 +25,4 @@ async def test_online_announcement_is_sent_only_once(monkeypatch):
     await bot.on_ready()
 
     channel.send.assert_awaited_once()
+    assert channel.send.await_args.args[0].endswith("\nDid you miss me?")
