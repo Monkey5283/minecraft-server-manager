@@ -131,6 +131,57 @@ If UFW is enabled, allow agent connections only from the Pi:
 sudo ufw allow from PI_LAN_IP to any port 8766 proto tcp
 ```
 
+### LinuxGSM-managed Minecraft server
+
+For a LinuxGSM server, use the included LinuxGSM examples instead of the
+standard systemd actions. The defaults assume the LinuxGSM user and script are
+both named `mcserver`.
+
+First verify the script and tmux session:
+
+```bash
+ls -l /home/mcserver/mcserver
+sudo -u mcserver tmux list-sessions
+```
+
+Copy and customize the agent example:
+
+```bash
+sudo cp ~/minecraft-server-manager/config/agent.linuxgsm.example.toml \
+  /etc/minecraft-manager/agent.toml
+sudo nano /etc/minecraft-manager/agent.toml
+```
+
+If the LinuxGSM user, script, or tmux session is not `mcserver`, replace every
+occurrence in the file. For PaperMC, the script may be named `pmcserver`.
+
+Install the LinuxGSM systemd override. Replace `/home/mcserver` in the copied
+file first if the LinuxGSM home is different:
+
+```bash
+sudo install -d /etc/systemd/system/mc-manager-agent.service.d
+sudo cp ~/minecraft-server-manager/deploy/systemd/mc-manager-agent-linuxgsm.conf \
+  /etc/systemd/system/mc-manager-agent.service.d/linuxgsm.conf
+sudo nano /etc/systemd/system/mc-manager-agent.service.d/linuxgsm.conf
+```
+
+Install the restricted LinuxGSM sudo rules after changing names and paths to
+match the server:
+
+```bash
+cd ~/minecraft-server-manager
+sudo nano deploy/sudoers/minecraft-manager-linuxgsm
+sudo visudo -cf deploy/sudoers/minecraft-manager-linuxgsm
+sudo install -m 0440 deploy/sudoers/minecraft-manager-linuxgsm \
+  /etc/sudoers.d/minecraft-manager-linuxgsm
+sudo systemctl daemon-reload
+sudo systemctl restart mc-manager-agent
+```
+
+The controller now uses LinuxGSM for start, stop, restart, update, and backup.
+Status only checks the LinuxGSM tmux session and never invokes `monitor`, so a
+status request cannot unexpectedly restart a deliberately stopped server.
+
 ## 4. Start the Pi controller
 
 Back on the Pi:

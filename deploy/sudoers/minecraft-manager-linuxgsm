@@ -1,0 +1,10 @@
+# LinuxGSM example for a user and script both named "mcserver".
+# Replace every occurrence when your LinuxGSM user or script has another name.
+mcmanager ALL=(mcserver) NOPASSWD: /home/mcserver/mcserver start
+mcmanager ALL=(mcserver) NOPASSWD: /home/mcserver/mcserver stop
+mcmanager ALL=(mcserver) NOPASSWD: /home/mcserver/mcserver restart
+mcmanager ALL=(mcserver) NOPASSWD: /home/mcserver/mcserver update
+mcmanager ALL=(mcserver) NOPASSWD: /home/mcserver/mcserver backup
+mcmanager ALL=(mcserver) NOPASSWD: /home/mcserver/mcserver check-update
+mcmanager ALL=(mcserver) NOPASSWD: /home/mcserver/mcserver update-lgsm
+mcmanager ALL=(mcserver) NOPASSWD: /usr/bin/tmux has-session -t =mcserver

@@ -18,3 +18,13 @@ def test_updater_never_targets_configuration_directory():
     assert 'VENV_DIR must be below /opt/minecraft-manager' in updater
     assert "reset --hard" in updater
     assert "reset --hard /etc" not in updater
+
+
+def test_linuxgsm_override_exposes_home_and_host_tmp():
+    override = (
+        ROOT / "deploy/systemd/mc-manager-agent-linuxgsm.conf"
+    ).read_text()
+
+    assert "ProtectHome=read-only" in override
+    assert "ReadWritePaths=/home/mcserver" in override
+    assert "PrivateTmp=false" in override
