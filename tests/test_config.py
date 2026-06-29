@@ -102,3 +102,27 @@ token_env = "AGENT"
 
     assert loaded.discord_guild_id == 123
     assert loaded.announcement_channel_id == 456
+
+
+def test_linuxgsm_example_uses_allowlisted_commands(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("MC_AGENT_TOKEN", "secret")
+
+    loaded = load_agent_config(
+        Path(__file__).parents[1] / "config/agent.linuxgsm.example.toml"
+    )
+    server = loaded.servers[0]
+
+    assert server.actions["start"][0][-2:] == (
+        "/home/mcserver/mcserver",
+        "start",
+    )
+    assert server.actions["update"][0][-1] == "update"
+    assert server.actions["status"][0][-3:] == (
+        "has-session",
+        "-t",
+        "=mcserver",
+    )
+    assert "backup" in server.scripts
+    assert "update_linuxgsm" in server.scripts

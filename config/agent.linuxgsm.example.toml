@@ -1,0 +1,31 @@
+[agent]
+name = "linuxgsm-minecraft-host"
+bind = "0.0.0.0"
+port = 8766
+token_env = "MC_AGENT_TOKEN"
+
+# This example assumes:
+#   Linux user: mcserver
+#   LinuxGSM script: /home/mcserver/mcserver
+#   tmux session: mcserver
+# Replace all three when your installation uses different names.
+[[servers]]
+id = "survival"
+name = "LinuxGSM Survival"
+working_directory = "/home/mcserver"
+timeout_seconds = 120
+update_timeout_seconds = 1800
+
+[servers.actions]
+start = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "start"]]
+stop = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "stop"]]
+restart = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "restart"]]
+# A read-only status check. Do not use `mcserver monitor` here because monitor
+# can restart a failed server.
+status = [["sudo", "-H", "-u", "mcserver", "/usr/bin/tmux", "has-session", "-t", "=mcserver"]]
+update = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "update"]]
+
+[servers.scripts]
+backup = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "backup"]]
+check_update = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "check-update"]]
+update_linuxgsm = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "update-lgsm"]]
