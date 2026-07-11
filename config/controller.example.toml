@@ -20,6 +20,22 @@ announcement_channel_id = 123456789012345678
 allowed_user_ids = [123456789012345678]
 allowed_role_ids = [123456789012345678]
 
+[ups]
+# Optional NUT integration for a USB UPS attached to the Pi controller.
+# For your CyberPower SX950U, configure NUT first, then set ups_name to the
+# name that works with: upsc UPS_NAME ups.status
+enabled = false
+ups_name = "cyberpower"
+status_command = ["/usr/bin/upsc", "cyberpower", "ups.status"]
+# If NUT reports OB or LB for this long, the controller starts shutdown steps.
+on_battery_delay_seconds = 30
+poll_interval_seconds = 15
+stop_timeout_seconds = 180
+# Each agent can expose this script to shut down its Ubuntu host after stop.
+downstream_shutdown_script = "shutdown_host"
+local_shutdown_delay_seconds = 15
+local_shutdown_command = ["/usr/bin/systemctl", "poweroff"]
+
 [[servers]]
 id = "survival"
 name = "Survival"

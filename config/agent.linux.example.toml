@@ -22,5 +22,7 @@ update = [["sudo", "/usr/local/sbin/update-minecraft-jar", "survival"]]
 # Script names become choices in Discord and the web UI.
 [servers.scripts]
 backup = [["sudo", "/usr/local/sbin/backup-minecraft", "survival"]]
+# Optional: used by the controller UPS monitor after it stops this server.
+shutdown_host = [["sudo", "/usr/sbin/shutdown", "-h", "+1", "UPS on battery; Minecraft Manager requested host shutdown"]]
 
 # Add another [[servers]] block when one machine hosts multiple servers.

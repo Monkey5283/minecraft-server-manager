@@ -189,6 +189,24 @@ class MinecraftDiscordBot(discord.Client):
                 channel_id,
             )
 
+    async def announce(self, message: str) -> None:
+        channel_id = self.config.announcement_channel_id
+        if not channel_id:
+            LOG.info("Skipping Discord announcement because no channel is configured")
+            return
+        try:
+            if not self.is_ready():
+                await asyncio.wait_for(self.wait_until_ready(), timeout=30)
+            channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
+            if not hasattr(channel, "send"):
+                raise TypeError("configured channel does not support messages")
+            await channel.send(
+                message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except (asyncio.TimeoutError, discord.DiscordException, TypeError):
+            LOG.exception("Could not send Discord announcement to channel %s", channel_id)
+
     async def _send_startup_server_status(
         self, channel: discord.abc.Messageable
     ) -> None:

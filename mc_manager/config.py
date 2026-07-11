@@ -58,6 +58,14 @@ def _command_steps(raw: Any, label: str) -> tuple[tuple[str, ...], ...]:
     return tuple(steps)
 
 
+def _string_array(raw: Any, label: str) -> tuple[str, ...]:
+    if not isinstance(raw, list) or not raw:
+        raise ConfigError(f"{label} must be a non-empty array of strings")
+    if not all(isinstance(item, str) and item for item in raw):
+        raise ConfigError(f"{label} must be an array of non-empty strings")
+    return tuple(raw)
+
+
 @dataclass(frozen=True)
 class AgentServer:
     id: str
@@ -87,6 +95,19 @@ class RemoteServer:
 
 
 @dataclass(frozen=True)
+class UPSConfig:
+    enabled: bool = False
+    ups_name: str = "ups"
+    status_command: tuple[str, ...] = ("/usr/bin/upsc", "ups", "ups.status")
+    poll_interval_seconds: int = 15
+    on_battery_delay_seconds: int = 30
+    stop_timeout_seconds: int = 180
+    downstream_shutdown_script: str = "shutdown_host"
+    local_shutdown_delay_seconds: int = 15
+    local_shutdown_command: tuple[str, ...] = ("/usr/bin/systemctl", "poweroff")
+
+
+@dataclass(frozen=True)
 class ControllerConfig:
     bind: str
     port: int
@@ -100,6 +121,7 @@ class ControllerConfig:
     allowed_user_ids: frozenset[int] = field(default_factory=frozenset)
     allowed_role_ids: frozenset[int] = field(default_factory=frozenset)
     servers: tuple[RemoteServer, ...] = ()
+    ups: UPSConfig = field(default_factory=UPSConfig)
 
 
 def load_agent_config(path: str | Path) -> AgentConfig:
@@ -163,6 +185,7 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
     controller = data.get("controller", {})
     auth = data.get("auth", {})
     discord = data.get("discord", {})
+    ups = data.get("ups", {})
 
     servers: list[RemoteServer] = []
     seen: set[str] = set()
@@ -187,6 +210,20 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
 
     guild_id = int(discord.get("guild_id", 0)) or None
     announcement_channel_id = int(discord.get("announcement_channel_id", 0)) or None
+    ups_name = str(ups.get("ups_name", "ups"))
+    status_command = _string_array(
+        ups.get("status_command", ["/usr/bin/upsc", ups_name, "ups.status"]),
+        "ups.status_command",
+    )
+    local_shutdown_command = _string_array(
+        ups.get("local_shutdown_command", ["/usr/bin/systemctl", "poweroff"]),
+        "ups.local_shutdown_command",
+    )
+    downstream_shutdown_script = _validate_id(
+        str(ups.get("downstream_shutdown_script", "shutdown_host")),
+        "ups.downstream_shutdown_script",
+    )
+
     return ControllerConfig(
         bind=str(controller.get("bind", "0.0.0.0")),
         port=int(controller.get("port", 8080)),
@@ -204,4 +241,19 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
         allowed_user_ids=frozenset(int(item) for item in discord.get("allowed_user_ids", [])),
         allowed_role_ids=frozenset(int(item) for item in discord.get("allowed_role_ids", [])),
         servers=tuple(servers),
+        ups=UPSConfig(
+            enabled=bool(ups.get("enabled", False)),
+            ups_name=ups_name,
+            status_command=status_command,
+            poll_interval_seconds=max(5, int(ups.get("poll_interval_seconds", 15))),
+            on_battery_delay_seconds=max(
+                0, int(ups.get("on_battery_delay_seconds", 30))
+            ),
+            stop_timeout_seconds=max(10, int(ups.get("stop_timeout_seconds", 180))),
+            downstream_shutdown_script=downstream_shutdown_script,
+            local_shutdown_delay_seconds=max(
+                0, int(ups.get("local_shutdown_delay_seconds", 15))
+            ),
+            local_shutdown_command=local_shutdown_command,
+        ),
     )

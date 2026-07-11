@@ -1,0 +1,8 @@
+# Install as /etc/sudoers.d/minecraft-manager-host-shutdown and validate with:
+#   sudo visudo -cf /etc/sudoers.d/minecraft-manager-host-shutdown
+#
+# This lets an agent expose this allowlisted script:
+#   shutdown_host = [["sudo", "/usr/sbin/shutdown", "-h", "+1", "..."]]
+#
+# It intentionally allows only scheduled halt requests through shutdown(8).
+mcmanager ALL=(root) NOPASSWD: /usr/sbin/shutdown -h +1 *
