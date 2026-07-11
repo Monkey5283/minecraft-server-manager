@@ -1,7 +1,7 @@
 from unittest.mock import AsyncMock
 
 from mc_manager.config import ControllerConfig, RemoteServer, UPSConfig
-from mc_manager.ups import UPSMonitor, ups_status_message
+from mc_manager.ups import UPSMonitor, clean_upsc_value, ups_status_message
 
 
 async def test_ups_monitor_stops_servers_and_runs_shutdown_script():
@@ -65,6 +65,11 @@ def test_ups_status_detects_battery_states():
     assert UPSMonitor.is_on_battery("OL LB") is True
 
 
+def test_clean_upsc_value_removes_ssl_warning():
+    assert clean_upsc_value("Init SSL without certificate database\nOL\n") == "OL"
+    assert clean_upsc_value("Init SSL without certificate database\n100\n") == "100"
+
+
 async def test_ups_status_message_includes_battery_charge():
     ups = UPSConfig(
         status_command=("/usr/bin/upsc", "cyberpower@localhost", "ups.status"),
@@ -82,3 +87,24 @@ async def test_ups_status_message_includes_battery_charge():
 
     assert "Online / line power" in message
     assert "96%" in message
+    assert "Init SSL" not in message
+
+
+async def test_ups_status_message_removes_ssl_warning():
+    ups = UPSConfig(
+        status_command=("/usr/bin/upsc", "cyberpower@localhost", "ups.status"),
+        charge_command=("/usr/bin/upsc", "cyberpower@localhost", "battery.charge"),
+    )
+    responses = {
+        ups.status_command: "Init SSL without certificate database\nOL\n",
+        ups.charge_command: "Init SSL without certificate database\n100\n",
+    }
+
+    async def command_runner(command: tuple[str, ...]) -> str:
+        return responses[command]
+
+    message = await ups_status_message(ups, command_runner)
+
+    assert "(`OL`)" in message
+    assert "100%" in message
+    assert "Init SSL" not in message

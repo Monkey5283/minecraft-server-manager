@@ -21,6 +21,20 @@ def is_on_battery(status: str) -> bool:
     return bool(tokens.intersection({"OB", "LB"}))
 
 
+def clean_upsc_value(output: str) -> str:
+    ignored_lines = {
+        "Init SSL without certificate database",
+    }
+    lines = [
+        line.strip()
+        for line in output.splitlines()
+        if line.strip() and line.strip() not in ignored_lines
+    ]
+    if not lines:
+        return ""
+    return lines[-1]
+
+
 async def run_command(command: tuple[str, ...]) -> str:
     LOG.info("Running UPS command: %s", command[0])
     process = await asyncio.create_subprocess_exec(
@@ -41,11 +55,13 @@ async def ups_status_message(
     ups: UPSConfig,
     command_runner: CommandRunner = run_command,
 ) -> str:
-    status = (await command_runner(ups.status_command)).strip() or "unknown"
+    status = clean_upsc_value(await command_runner(ups.status_command)) or "unknown"
     try:
-        charge = (await command_runner(ups.charge_command)).strip()
+        charge = clean_upsc_value(await command_runner(ups.charge_command))
     except Exception:
         LOG.exception("Could not read UPS battery charge")
+        charge = "unknown"
+    if not charge:
         charge = "unknown"
     power = "On battery" if is_on_battery(status) else "Online / line power"
     charge_text = f"{charge}%" if charge != "unknown" else charge
@@ -102,7 +118,7 @@ class UPSMonitor:
 
     async def read_status(self) -> str:
         output = await self.command_runner(self.ups.status_command)
-        return output.strip()
+        return clean_upsc_value(output)
 
     @staticmethod
     def is_on_battery(status: str) -> bool:
