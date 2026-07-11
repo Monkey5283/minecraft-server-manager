@@ -158,11 +158,12 @@ Important:
 - `MC_AGENT_TOKEN` must equal this host's token from `controller.env`.
 - Set `working_directory` to the Minecraft server directory.
 - Change the systemd service names in `actions` if your service is not named
-  `minecraft@survival.service`.
+  `minecraft@survival.service`. For your PaperMC service, use
+  `papermc.service`.
 - Only commands listed under `actions` and `scripts` can be executed.
 
 Install the restricted sudo rules after replacing `survival` with the correct
-server ID:
+server ID and replacing the service name with your real service:
 
 ```bash
 cd ~/minecraft-server-manager
@@ -172,12 +173,23 @@ sudo install -m 0440 deploy/sudoers/minecraft-manager \
   /etc/sudoers.d/minecraft-manager
 ```
 
+For a PaperMC service named `papermc.service`, `/etc/sudoers.d/minecraft-manager`
+should allow these commands:
+
+```sudoers
+mcmanager ALL=(root) NOPASSWD: /usr/bin/systemctl start papermc.service
+mcmanager ALL=(root) NOPASSWD: /usr/bin/systemctl stop papermc.service
+mcmanager ALL=(root) NOPASSWD: /usr/bin/systemctl restart papermc.service
+mcmanager ALL=(root) NOPASSWD: /usr/local/sbin/update-papermc survival
+mcmanager ALL=(root) NOPASSWD: /usr/local/sbin/backup-minecraft survival
+```
+
 If you want UPS automation to shut down this Ubuntu machine after stopping the
 Minecraft service, add this script to `[servers.scripts]` in
 `/etc/minecraft-manager/agent.toml`:
 
 ```toml
-shutdown_host = [["sudo", "/usr/sbin/shutdown", "-h", "+1", "UPS on battery; Minecraft Manager requested host shutdown"]]
+shutdown_host = [["sudo", "-n", "/usr/sbin/shutdown", "-h", "+1", "UPS on battery; Minecraft Manager requested host shutdown"]]
 ```
 
 Then install the restricted shutdown sudo rule:

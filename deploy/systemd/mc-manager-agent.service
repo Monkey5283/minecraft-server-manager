@@ -18,6 +18,7 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=-/srv/minecraft
 ReadWritePaths=-/srv/minecraft-backups
+ReadWritePaths=-/run/sudo
 
 [Install]
 WantedBy=multi-user.target

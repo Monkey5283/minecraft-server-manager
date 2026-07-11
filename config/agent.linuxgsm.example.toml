@@ -17,17 +17,17 @@ timeout_seconds = 120
 update_timeout_seconds = 1800
 
 [servers.actions]
-start = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "start"]]
-stop = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "stop"]]
-restart = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "restart"]]
+start = [["sudo", "-n", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "start"]]
+stop = [["sudo", "-n", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "stop"]]
+restart = [["sudo", "-n", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "restart"]]
 # A read-only status check. Do not use `mcserver monitor` here because monitor
 # can restart a failed server.
-status = [["sudo", "-H", "-u", "mcserver", "/usr/bin/tmux", "has-session", "-t", "=mcserver"]]
-update = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "update"]]
+status = [["sudo", "-n", "-H", "-u", "mcserver", "/usr/bin/tmux", "has-session", "-t", "=mcserver"]]
+update = [["sudo", "-n", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "update"]]
 
 [servers.scripts]
-backup = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "backup"]]
-check_update = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "check-update"]]
-update_linuxgsm = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "update-lgsm"]]
+backup = [["sudo", "-n", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "backup"]]
+check_update = [["sudo", "-n", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "check-update"]]
+update_linuxgsm = [["sudo", "-n", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "update-lgsm"]]
 # Optional: used by the controller UPS monitor after it stops this server.
-shutdown_host = [["sudo", "/usr/sbin/shutdown", "-h", "+1", "UPS on battery; Minecraft Manager requested host shutdown"]]
+shutdown_host = [["sudo", "-n", "/usr/sbin/shutdown", "-h", "+1", "UPS on battery; Minecraft Manager requested host shutdown"]]
