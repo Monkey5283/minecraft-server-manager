@@ -8,6 +8,7 @@ from discord import app_commands
 
 from .client import AgentClient, AgentUnavailable
 from .config import ControllerConfig, RemoteServer
+from .ups import ups_status_message
 
 
 LOG = logging.getLogger("mc_manager.discord")
@@ -144,6 +145,35 @@ class MinecraftDiscordBot(discord.Client):
                 await interaction.followup.send(message, ephemeral=True)
             except AgentUnavailable as exc:
                 await interaction.followup.send(str(exc), ephemeral=True)
+
+        @self.tree.command(
+            name="ups",
+            description="Show the controller battery backup status",
+        )
+        async def ups(interaction: discord.Interaction) -> None:
+            if not self.is_allowed(interaction):
+                await interaction.response.send_message(
+                    "You are not allowed to view UPS status.", ephemeral=True
+                )
+                return
+            if not self.config.ups.enabled:
+                await interaction.response.send_message(
+                    "UPS monitoring is not enabled on this controller.",
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                await interaction.followup.send(
+                    await ups_status_message(self.config.ups),
+                    ephemeral=True,
+                )
+            except Exception as exc:
+                LOG.exception("Could not read UPS status for Discord command")
+                await interaction.followup.send(
+                    f"Could not read UPS status: {exc}",
+                    ephemeral=True,
+                )
 
     async def _wait_for_job(
         self, server: RemoteServer, job_id: str, attempts: int = 120

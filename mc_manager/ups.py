@@ -16,6 +16,46 @@ Announcer = Callable[[str], Awaitable[None]]
 Sleeper = Callable[[float], Awaitable[None]]
 
 
+def is_on_battery(status: str) -> bool:
+    tokens = {part.strip().upper() for part in status.replace(",", " ").split()}
+    return bool(tokens.intersection({"OB", "LB"}))
+
+
+async def run_command(command: tuple[str, ...]) -> str:
+    LOG.info("Running UPS command: %s", command[0])
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _ = await process.communicate()
+    output = stdout.decode("utf-8", errors="replace")
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"{command[0]} exited with code {process.returncode}: {output[-1000:]}"
+        )
+    return output
+
+
+async def ups_status_message(
+    ups: UPSConfig,
+    command_runner: CommandRunner = run_command,
+) -> str:
+    status = (await command_runner(ups.status_command)).strip() or "unknown"
+    try:
+        charge = (await command_runner(ups.charge_command)).strip()
+    except Exception:
+        LOG.exception("Could not read UPS battery charge")
+        charge = "unknown"
+    power = "On battery" if is_on_battery(status) else "Online / line power"
+    charge_text = f"{charge}%" if charge != "unknown" else charge
+    return (
+        "**Battery Backup**\n"
+        f"Power: **{power}** (`{status}`)\n"
+        f"Battery: **{charge_text}**"
+    )
+
+
 class UPSMonitor:
     def __init__(
         self,
@@ -30,7 +70,7 @@ class UPSMonitor:
         self.ups = config.ups
         self.agents = agents
         self.announce = announce
-        self.command_runner = command_runner or self._run_command
+        self.command_runner = command_runner or run_command
         self.sleep = sleeper
         self._triggered = False
 
@@ -66,8 +106,7 @@ class UPSMonitor:
 
     @staticmethod
     def is_on_battery(status: str) -> bool:
-        tokens = {part.strip().upper() for part in status.replace(",", " ").split()}
-        return bool(tokens.intersection({"OB", "LB"}))
+        return is_on_battery(status)
 
     async def handle_power_outage(self, status: str) -> None:
         await self.announce(
@@ -139,18 +178,3 @@ class UPSMonitor:
                 raise TimeoutError(f"{server.name}: job {job_id} timed out")
             await self.sleep(2)
 
-    @staticmethod
-    async def _run_command(command: tuple[str, ...]) -> str:
-        LOG.info("Running UPS command: %s", command[0])
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        stdout, _ = await process.communicate()
-        output = stdout.decode("utf-8", errors="replace")
-        if process.returncode != 0:
-            raise RuntimeError(
-                f"{command[0]} exited with code {process.returncode}: {output[-1000:]}"
-            )
-        return output

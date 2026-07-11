@@ -138,8 +138,46 @@ token_env = "AGENT"
     assert loaded.ups.enabled is True
     assert loaded.ups.ups_name == "cyberpower"
     assert loaded.ups.status_command == ("/usr/bin/upsc", "cyberpower", "ups.status")
+    assert loaded.ups.charge_command == (
+        "/usr/bin/upsc",
+        "cyberpower",
+        "battery.charge",
+    )
     assert loaded.ups.poll_interval_seconds == 10
     assert loaded.ups.downstream_shutdown_script == "shutdown_host"
+
+
+def test_controller_derives_ups_charge_command_from_status_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    for name in ("WEB", "SESSION", "DISCORD", "AGENT"):
+        monkeypatch.setenv(name, "secret")
+    config = tmp_path / "controller.toml"
+    config.write_text(
+        """
+[auth]
+web_password_env = "WEB"
+session_secret_env = "SESSION"
+[discord]
+discord_token_env = "DISCORD"
+[ups]
+enabled = true
+status_command = ["/usr/bin/upsc", "cyberpower@localhost", "ups.status"]
+[[servers]]
+id = "survival"
+agent_url = "http://192.168.1.20:8766"
+token_env = "AGENT"
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_controller_config(config)
+
+    assert loaded.ups.charge_command == (
+        "/usr/bin/upsc",
+        "cyberpower@localhost",
+        "battery.charge",
+    )
 
 
 def test_linuxgsm_example_uses_allowlisted_commands(

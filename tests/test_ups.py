@@ -1,7 +1,7 @@
 from unittest.mock import AsyncMock
 
 from mc_manager.config import ControllerConfig, RemoteServer, UPSConfig
-from mc_manager.ups import UPSMonitor
+from mc_manager.ups import UPSMonitor, ups_status_message
 
 
 async def test_ups_monitor_stops_servers_and_runs_shutdown_script():
@@ -63,3 +63,22 @@ def test_ups_status_detects_battery_states():
     assert UPSMonitor.is_on_battery("OB DISCHRG") is True
     assert UPSMonitor.is_on_battery("OL CHRG") is False
     assert UPSMonitor.is_on_battery("OL LB") is True
+
+
+async def test_ups_status_message_includes_battery_charge():
+    ups = UPSConfig(
+        status_command=("/usr/bin/upsc", "cyberpower@localhost", "ups.status"),
+        charge_command=("/usr/bin/upsc", "cyberpower@localhost", "battery.charge"),
+    )
+    responses = {
+        ups.status_command: "OL\n",
+        ups.charge_command: "96\n",
+    }
+
+    async def command_runner(command: tuple[str, ...]) -> str:
+        return responses[command]
+
+    message = await ups_status_message(ups, command_runner)
+
+    assert "Online / line power" in message
+    assert "96%" in message

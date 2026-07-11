@@ -101,6 +101,7 @@ sudo nano /etc/minecraft-manager/controller.toml
 enabled = true
 ups_name = "cyberpower"
 status_command = ["/usr/bin/upsc", "cyberpower", "ups.status"]
+charge_command = ["/usr/bin/upsc", "cyberpower", "battery.charge"]
 poll_interval_seconds = 15
 on_battery_delay_seconds = 30
 stop_timeout_seconds = 180
@@ -116,6 +117,9 @@ When NUT reports `OB` or `LB` for the delay period, the controller will:
 3. run the agent script named `shutdown_host` when that script exists;
 4. announce that the Pi is shutting down;
 5. run the local Pi shutdown command.
+
+Discord also gets an `/ups` slash command that shows line/battery status and
+current battery charge.
 
 Install the Polkit rule that lets the controller service user power off the Pi:
 

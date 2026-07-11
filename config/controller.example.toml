@@ -27,6 +27,8 @@ allowed_role_ids = [123456789012345678]
 enabled = false
 ups_name = "cyberpower"
 status_command = ["/usr/bin/upsc", "cyberpower", "ups.status"]
+# Optional. Defaults to the same upsc target as status_command.
+charge_command = ["/usr/bin/upsc", "cyberpower", "battery.charge"]
 # If NUT reports OB or LB for this long, the controller starts shutdown steps.
 on_battery_delay_seconds = 30
 poll_interval_seconds = 15

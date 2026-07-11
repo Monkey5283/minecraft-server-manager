@@ -99,6 +99,7 @@ class UPSConfig:
     enabled: bool = False
     ups_name: str = "ups"
     status_command: tuple[str, ...] = ("/usr/bin/upsc", "ups", "ups.status")
+    charge_command: tuple[str, ...] = ("/usr/bin/upsc", "ups", "battery.charge")
     poll_interval_seconds: int = 15
     on_battery_delay_seconds: int = 30
     stop_timeout_seconds: int = 180
@@ -215,6 +216,15 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
         ups.get("status_command", ["/usr/bin/upsc", ups_name, "ups.status"]),
         "ups.status_command",
     )
+    default_charge_command = (
+        (*status_command[:-1], "battery.charge")
+        if status_command
+        else ("/usr/bin/upsc", ups_name, "battery.charge")
+    )
+    charge_command = _string_array(
+        ups.get("charge_command", list(default_charge_command)),
+        "ups.charge_command",
+    )
     local_shutdown_command = _string_array(
         ups.get("local_shutdown_command", ["/usr/bin/systemctl", "poweroff"]),
         "ups.local_shutdown_command",
@@ -245,6 +255,7 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
             enabled=bool(ups.get("enabled", False)),
             ups_name=ups_name,
             status_command=status_command,
+            charge_command=charge_command,
             poll_interval_seconds=max(5, int(ups.get("poll_interval_seconds", 15))),
             on_battery_delay_seconds=max(
                 0, int(ups.get("on_battery_delay_seconds", 30))
