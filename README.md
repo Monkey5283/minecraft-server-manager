@@ -12,6 +12,7 @@ small agent that can only execute commands listed in its local configuration.
 - A Discord bot token
 - Tailscale on the Pi and on devices that may open the dashboard
 - Fixed LAN addresses or DHCP reservations for the Pi and Ubuntu machines
+- Optional: a USB UPS on the Pi, configured with NUT
 
 Do not forward the dashboard or agent ports through your router.
 
@@ -77,6 +78,53 @@ openssl rand -hex 32
 
 Each Ubuntu host should have its own agent token.
 
+### Optional: UPS shutdown automation
+
+The controller can watch a USB UPS through NUT. For a CyberPower SX950U attached
+to the Pi by USB, configure NUT so this command works on the Pi:
+
+```bash
+upsc cyberpower ups.status
+```
+
+During normal power it usually includes `OL`. During a power outage it includes
+`OB`, and sometimes `LB` when the battery is low.
+
+Once NUT works, enable the controller UPS block:
+
+```bash
+sudo nano /etc/minecraft-manager/controller.toml
+```
+
+```toml
+[ups]
+enabled = true
+ups_name = "cyberpower"
+status_command = ["/usr/bin/upsc", "cyberpower", "ups.status"]
+poll_interval_seconds = 15
+on_battery_delay_seconds = 30
+stop_timeout_seconds = 180
+downstream_shutdown_script = "shutdown_host"
+local_shutdown_delay_seconds = 15
+local_shutdown_command = ["/usr/bin/systemctl", "poweroff"]
+```
+
+When NUT reports `OB` or `LB` for the delay period, the controller will:
+
+1. announce the UPS event in Discord;
+2. send `stop` to each configured Minecraft server;
+3. run the agent script named `shutdown_host` when that script exists;
+4. announce that the Pi is shutting down;
+5. run the local Pi shutdown command.
+
+Install the Polkit rule that lets the controller service user power off the Pi:
+
+```bash
+cd ~/minecraft-server-manager
+sudo install -m 0644 deploy/polkit/minecraft-manager-controller-poweroff.rules \
+  /etc/polkit-1/rules.d/49-minecraft-manager-controller-poweroff.rules
+```
+
 ## 3. Install an agent on each Ubuntu machine
 
 Run this on every Minecraft machine:
@@ -116,6 +164,23 @@ sudo nano deploy/sudoers/minecraft-manager
 sudo visudo -cf deploy/sudoers/minecraft-manager
 sudo install -m 0440 deploy/sudoers/minecraft-manager \
   /etc/sudoers.d/minecraft-manager
+```
+
+If you want UPS automation to shut down this Ubuntu machine after stopping the
+Minecraft service, add this script to `[servers.scripts]` in
+`/etc/minecraft-manager/agent.toml`:
+
+```toml
+shutdown_host = [["sudo", "/usr/sbin/shutdown", "-h", "+1", "UPS on battery; Minecraft Manager requested host shutdown"]]
+```
+
+Then install the restricted shutdown sudo rule:
+
+```bash
+cd ~/minecraft-server-manager
+sudo visudo -cf deploy/sudoers/minecraft-manager-host-shutdown
+sudo install -m 0440 deploy/sudoers/minecraft-manager-host-shutdown \
+  /etc/sudoers.d/minecraft-manager-host-shutdown
 ```
 
 Start the agent:

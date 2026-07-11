@@ -104,6 +104,44 @@ token_env = "AGENT"
     assert loaded.announcement_channel_id == 456
 
 
+def test_controller_loads_ups_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    for name in ("WEB", "SESSION", "DISCORD", "AGENT"):
+        monkeypatch.setenv(name, "secret")
+    config = tmp_path / "controller.toml"
+    config.write_text(
+        """
+[auth]
+web_password_env = "WEB"
+session_secret_env = "SESSION"
+[discord]
+discord_token_env = "DISCORD"
+[ups]
+enabled = true
+ups_name = "cyberpower"
+status_command = ["/usr/bin/upsc", "cyberpower", "ups.status"]
+poll_interval_seconds = 10
+on_battery_delay_seconds = 20
+stop_timeout_seconds = 90
+downstream_shutdown_script = "shutdown_host"
+local_shutdown_delay_seconds = 5
+local_shutdown_command = ["/usr/bin/systemctl", "poweroff"]
+[[servers]]
+id = "survival"
+agent_url = "http://192.168.1.20:8766"
+token_env = "AGENT"
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_controller_config(config)
+
+    assert loaded.ups.enabled is True
+    assert loaded.ups.ups_name == "cyberpower"
+    assert loaded.ups.status_command == ("/usr/bin/upsc", "cyberpower", "ups.status")
+    assert loaded.ups.poll_interval_seconds == 10
+    assert loaded.ups.downstream_shutdown_script == "shutdown_host"
+
+
 def test_linuxgsm_example_uses_allowlisted_commands(
     monkeypatch: pytest.MonkeyPatch,
 ):

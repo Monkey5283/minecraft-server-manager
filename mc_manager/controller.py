@@ -18,6 +18,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .client import AgentClient, AgentUnavailable
 from .config import ConfigError, ControllerConfig, RemoteServer, load_controller_config
 from .discord_bot import MinecraftDiscordBot
+from .ups import UPSMonitor
 
 
 LOG = logging.getLogger("mc_manager.controller")
@@ -37,14 +38,26 @@ def create_controller_app(config: ControllerConfig) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         bot_task = asyncio.create_task(bot.start(config.discord_token))
+        ups_monitor = UPSMonitor(config, agents, bot.announce)
+        ups_task = (
+            asyncio.create_task(ups_monitor.run())
+            if config.ups.enabled
+            else None
+        )
         app.state.bot_task = bot_task
+        app.state.ups_task = ups_task
         try:
             yield
         finally:
+            if ups_task and not ups_task.done():
+                ups_task.cancel()
             await bot.close()
             if not bot_task.done():
                 bot_task.cancel()
-            await asyncio.gather(bot_task, return_exceptions=True)
+            await asyncio.gather(
+                *(task for task in (bot_task, ups_task) if task),
+                return_exceptions=True,
+            )
             await agents.close()
 
     app = FastAPI(

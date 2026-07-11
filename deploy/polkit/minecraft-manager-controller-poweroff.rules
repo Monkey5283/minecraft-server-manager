@@ -1,0 +1,16 @@
+// Install as /etc/polkit-1/rules.d/49-minecraft-manager-controller-poweroff.rules.
+// This permits the controller service user to run:
+//   /usr/bin/systemctl poweroff
+// Keep this file only on the Pi controller.
+polkit.addRule(function(action, subject) {
+  if (
+    subject.user == "mcmanager" &&
+    (
+      action.id == "org.freedesktop.login1.power-off" ||
+      action.id == "org.freedesktop.login1.power-off-multiple-sessions" ||
+      action.id == "org.freedesktop.login1.power-off-ignore-inhibit"
+    )
+  ) {
+    return polkit.Result.YES;
+  }
+});

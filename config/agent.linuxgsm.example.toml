@@ -29,3 +29,5 @@ update = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "update"]]
 backup = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "backup"]]
 check_update = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "check-update"]]
 update_linuxgsm = [["sudo", "-H", "-u", "mcserver", "/home/mcserver/mcserver", "update-lgsm"]]
+# Optional: used by the controller UPS monitor after it stops this server.
+shutdown_host = [["sudo", "/usr/sbin/shutdown", "-h", "+1", "UPS on battery; Minecraft Manager requested host shutdown"]]
