@@ -59,6 +59,98 @@ async def test_ups_monitor_stops_servers_and_runs_shutdown_script():
     assert commands == [("/usr/bin/systemctl", "poweroff")]
 
 
+async def test_ups_monitor_announces_before_shutdown_delay():
+    config = ControllerConfig(
+        bind="127.0.0.1",
+        port=8080,
+        web_username="admin",
+        web_password="password",
+        session_secret="session",
+        cookie_secure=False,
+        discord_token="discord",
+        discord_guild_id=None,
+        announcement_channel_id=123,
+        ups=UPSConfig(
+            enabled=True,
+            status_command=("status",),
+            on_battery_delay_seconds=30,
+            local_shutdown_delay_seconds=0,
+            local_shutdown_command=("poweroff",),
+        ),
+    )
+    status_responses = ["OB DISCHRG", "OB DISCHRG"]
+    commands: list[tuple[str, ...]] = []
+
+    async def command_runner(command: tuple[str, ...]) -> str:
+        commands.append(command)
+        if command == ("status",):
+            return status_responses.pop(0)
+        return ""
+
+    announce = AsyncMock()
+    sleep_events: list[tuple[float, int]] = []
+
+    async def sleeper(seconds: float) -> None:
+        sleep_events.append((seconds, announce.await_count))
+
+    monitor = UPSMonitor(
+        config,
+        AsyncMock(),
+        announce,
+        command_runner=command_runner,
+        sleeper=sleeper,
+    )
+
+    await monitor.run()
+
+    assert sleep_events[0] == (30, 1)
+    first_message = announce.await_args_list[0].args[0]
+    assert "Shutdown starts in 30 seconds unless power returns" in first_message
+    assert "Stopping Minecraft servers now" in announce.await_args_list[1].args[0]
+    assert commands == [("status",), ("status",), ("poweroff",)]
+
+
+async def test_ups_monitor_cancels_shutdown_if_power_returns_during_delay():
+    config = ControllerConfig(
+        bind="127.0.0.1",
+        port=8080,
+        web_username="admin",
+        web_password="password",
+        session_secret="session",
+        cookie_secure=False,
+        discord_token="discord",
+        discord_guild_id=None,
+        announcement_channel_id=123,
+        ups=UPSConfig(
+            enabled=True,
+            status_command=("status",),
+            on_battery_delay_seconds=30,
+            local_shutdown_delay_seconds=0,
+            local_shutdown_command=("poweroff",),
+        ),
+    )
+
+    async def command_runner(command: tuple[str, ...]) -> str:
+        assert command == ("status",)
+        return "OL CHRG"
+
+    announce = AsyncMock()
+    monitor = UPSMonitor(
+        config,
+        AsyncMock(),
+        announce,
+        command_runner=command_runner,
+        sleeper=AsyncMock(),
+    )
+
+    result = await monitor.confirm_on_battery_after_delay("OB DISCHRG")
+
+    assert result is None
+    assert announce.await_count == 2
+    assert "Shutdown starts in 30 seconds unless power returns" in announce.await_args_list[0].args[0]
+    assert "Shutdown sequence canceled" in announce.await_args_list[1].args[0]
+
+
 def test_ups_status_detects_battery_states():
     assert UPSMonitor.is_on_battery("OB DISCHRG") is True
     assert UPSMonitor.is_on_battery("OL CHRG") is False

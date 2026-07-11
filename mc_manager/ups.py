@@ -104,14 +104,11 @@ class UPSMonitor:
 
             if self.is_on_battery(status):
                 LOG.warning("UPS %s is on battery: %s", self.ups.ups_name, status)
-                if self.ups.on_battery_delay_seconds:
-                    await self.sleep(self.ups.on_battery_delay_seconds)
-                    status = await self.read_status()
-                    if not self.is_on_battery(status):
-                        LOG.info("UPS %s returned to line power", self.ups.ups_name)
-                        continue
+                confirmed_status = await self.confirm_on_battery_after_delay(status)
+                if confirmed_status is None:
+                    continue
                 self._triggered = True
-                await self.handle_power_outage(status)
+                await self.handle_power_outage(confirmed_status)
                 return
 
             await self.sleep(self.ups.poll_interval_seconds)
@@ -124,10 +121,31 @@ class UPSMonitor:
     def is_on_battery(status: str) -> bool:
         return is_on_battery(status)
 
-    async def handle_power_outage(self, status: str) -> None:
+    async def confirm_on_battery_after_delay(self, initial_status: str) -> str | None:
+        delay = self.ups.on_battery_delay_seconds
         await self.announce(
             "⚠️ **UPS is on battery.** Power outage detected "
-            f"(`{status}`). Stopping Minecraft servers now."
+            f"(`{initial_status}`). Shutdown starts in {delay} seconds unless power returns."
+        )
+        if not delay:
+            return initial_status
+
+        await self.sleep(delay)
+        status = await self.read_status()
+        if self.is_on_battery(status):
+            return status
+
+        LOG.info("UPS %s returned to line power", self.ups.ups_name)
+        await self.announce(
+            "✅ **UPS is back on line power.** Shutdown sequence canceled "
+            f"(`{status}`)."
+        )
+        return None
+
+    async def handle_power_outage(self, status: str) -> None:
+        await self.announce(
+            "⚠️ **UPS is still on battery after the delay.** "
+            f"Stopping Minecraft servers now (`{status}`)."
         )
         results = await asyncio.gather(
             *(self._protect_server(server) for server in self.config.servers),

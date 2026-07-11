@@ -84,7 +84,7 @@ The controller can watch a USB UPS through NUT. For a CyberPower SX950U attached
 to the Pi by USB, configure NUT so this command works on the Pi:
 
 ```bash
-upsc cyberpower ups.status
+upsc cyberpower@localhost ups.status
 ```
 
 During normal power it usually includes `OL`. During a power outage it includes
@@ -100,8 +100,8 @@ sudo nano /etc/minecraft-manager/controller.toml
 [ups]
 enabled = true
 ups_name = "cyberpower"
-status_command = ["/usr/bin/upsc", "cyberpower", "ups.status"]
-charge_command = ["/usr/bin/upsc", "cyberpower", "battery.charge"]
+status_command = ["/usr/bin/upsc", "cyberpower@localhost", "ups.status"]
+charge_command = ["/usr/bin/upsc", "cyberpower@localhost", "battery.charge"]
 poll_interval_seconds = 15
 on_battery_delay_seconds = 30
 stop_timeout_seconds = 180
@@ -110,13 +110,15 @@ local_shutdown_delay_seconds = 15
 local_shutdown_command = ["/usr/bin/systemctl", "poweroff"]
 ```
 
-When NUT reports `OB` or `LB` for the delay period, the controller will:
+When NUT first reports `OB` or `LB`, the controller immediately announces the
+power event in Discord. Then it waits `on_battery_delay_seconds`. If power comes
+back during that delay, it announces that shutdown was canceled. If the UPS is
+still on battery after the delay, the controller will:
 
-1. announce the UPS event in Discord;
-2. send `stop` to each configured Minecraft server;
-3. run the agent script named `shutdown_host` when that script exists;
-4. announce that the Pi is shutting down;
-5. run the local Pi shutdown command.
+1. send `stop` to each configured Minecraft server;
+2. run the agent script named `shutdown_host` when that script exists;
+3. announce that the Pi is shutting down;
+4. run the local Pi shutdown command.
 
 Discord also gets an `/ups` slash command that shows line/battery status and
 current battery charge.
