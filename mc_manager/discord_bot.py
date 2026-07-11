@@ -183,6 +183,7 @@ class MinecraftDiscordBot(discord.Client):
             self._online_announced = True
             LOG.info("Online announcement sent to Discord channel %s", channel_id)
             await self._send_startup_server_status(channel)
+            await self._send_ups_ready_announcement(channel)
         except (discord.DiscordException, TypeError):
             LOG.exception(
                 "Could not send the online announcement to Discord channel %s",
@@ -226,6 +227,20 @@ class MinecraftDiscordBot(discord.Client):
             LOG.info("Startup status announced for %s server(s)", len(lines))
         except discord.DiscordException:
             LOG.exception("Could not send the startup server status announcement")
+
+    async def _send_ups_ready_announcement(
+        self, channel: discord.abc.Messageable
+    ) -> None:
+        if not self.config.ups.enabled:
+            return
+        try:
+            await channel.send(
+                "🔋 Battery Backup Online and Ready",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            LOG.info("UPS ready announcement sent")
+        except discord.DiscordException:
+            LOG.exception("Could not send the UPS ready announcement")
 
     async def _startup_status_line(self, server: RemoteServer) -> str:
         try:

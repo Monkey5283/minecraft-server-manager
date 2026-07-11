@@ -1,7 +1,7 @@
 from unittest.mock import AsyncMock, Mock
 
 from mc_manager.client import AgentUnavailable
-from mc_manager.config import ControllerConfig, RemoteServer
+from mc_manager.config import ControllerConfig, RemoteServer, UPSConfig
 from mc_manager.discord_bot import MinecraftDiscordBot
 
 
@@ -76,3 +76,27 @@ async def test_startup_announcement_includes_server_statuses(monkeypatch):
     assert "**Survival** — online" in status_message
     assert "**Creative** — unreachable" in status_message
     assert agents.status.await_count == 2
+
+
+async def test_startup_announcement_includes_ups_ready_when_enabled(monkeypatch):
+    config = ControllerConfig(
+        bind="127.0.0.1",
+        port=8080,
+        web_username="admin",
+        web_password="password",
+        session_secret="session-secret",
+        cookie_secure=False,
+        discord_token="discord-token",
+        discord_guild_id=123,
+        announcement_channel_id=456,
+        ups=UPSConfig(enabled=True),
+    )
+    channel = Mock()
+    channel.send = AsyncMock()
+    bot = MinecraftDiscordBot(config, Mock())
+    monkeypatch.setattr(bot, "get_channel", lambda _channel_id: channel)
+
+    await bot.on_ready()
+
+    assert channel.send.await_count == 2
+    assert channel.send.await_args_list[1].args[0] == "🔋 Battery Backup Online and Ready"
