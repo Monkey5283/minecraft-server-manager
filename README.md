@@ -214,6 +214,187 @@ If UFW is enabled, allow agent connections only from the Pi:
 sudo ufw allow from PI_LAN_IP to any port 8766 proto tcp
 ```
 
+### Player join, transfer, and leave messages
+
+The controller can post one Discord message for each player's network session.
+It edits that same message when the player moves between Paper servers. After
+the player has been absent from every tracked Paper server for the configured
+grace period, it edits the message one final time to show that the player left.
+A later join starts a new message, and every player is tracked independently.
+
+Tracking reads Minecraft's UDP Query player list through the agent running on
+each Paper machine. Set `track_players = true` only on Paper controller entries.
+Do not set it on the Velocity entry: Velocity is the proxy, while the Lobby and
+Vanilla Paper servers report the player's actual location.
+
+The following setup matches this network:
+
+- System 2 is `192.168.1.35` and runs Velocity plus the Lobby Paper server.
+- Lobby listens locally on `127.0.0.1:25566`.
+- Vanilla is the Paper server on `192.168.1.16:25567`.
+
+#### 1. Update the program first
+
+Run this on the Pi controller, System 2, and the Vanilla machine:
+
+```bash
+sudo update-minecraft-manager
+```
+
+This installs the new program and systemd unit for that machine, then restarts
+its manager service. It preserves everything under `/etc/minecraft-manager`,
+so it does not add the new settings to your existing TOML files. Add them with
+the following steps.
+
+#### 2. Enable Query on both Paper servers
+
+On System 2, edit the Lobby properties:
+
+```bash
+sudo nano /srv/minecraft/lobby/server.properties
+```
+
+Edit the existing properties so they contain exactly one of each line:
+
+```properties
+enable-query=true
+query.port=25566
+```
+
+On the Vanilla machine, edit:
+
+```bash
+sudo nano /home/monkeycraftvanilla/Vanilla/server.properties
+```
+
+Set:
+
+```properties
+enable-query=true
+query.port=25567
+```
+
+Query uses UDP even though players use TCP on the same numbered backend port.
+The agent queries its own Paper server, so do not add a router port-forward and
+do not open either Query port in UFW. Keep ports `25566` and `25567` private.
+
+#### 3. Tell each agent where its Paper Query endpoint is
+
+On System 2, open:
+
+```bash
+sudo nano /etc/minecraft-manager/agent.toml
+```
+
+Under the existing Lobby `[[servers]]` entry, before the next `[[servers]]`
+entry, add:
+
+```toml
+[servers.player_query]
+host = "127.0.0.1"
+port = 25566
+timeout_seconds = 3
+```
+
+Do not add a `[servers.player_query]` block to the Velocity entry.
+
+On the Vanilla machine, open the same agent configuration path and add this
+under its existing Vanilla/`survival` `[[servers]]` entry:
+
+```toml
+[servers.player_query]
+host = "192.168.1.16"
+port = 25567
+timeout_seconds = 3
+```
+
+The `host` and `port` are the Paper endpoint as reached from that same machine;
+they are not the agent URL and they are not the public Velocity address.
+
+#### 4. Enable tracking on the Pi controller
+
+Open:
+
+```bash
+sudo nano /etc/minecraft-manager/controller.toml
+```
+
+Add this top-level block before the first `[[servers]]` entry:
+
+```toml
+[player_tracking]
+enabled = true
+poll_interval_seconds = 5
+leave_grace_seconds = 10
+```
+
+It uses `[discord].announcement_channel_id` by default. To post player sessions
+in a different Discord text channel, add its ID to the block:
+
+```toml
+channel_id = 123456789012345678
+```
+
+The bot needs **View Channel** and **Send Messages** in that channel. It edits
+its own messages, so it does not need the **Manage Messages** permission.
+
+Edit the existing Lobby and Vanilla controller entries; do not create duplicate
+entries. They should include `track_players = true`:
+
+```toml
+[[servers]]
+id = "lobby"
+name = "Lobby"
+agent_url = "http://192.168.1.35:8766"
+token_env = "MC_AGENT_TOKEN_HOST2"
+track_players = true
+
+[[servers]]
+id = "survival"
+name = "Vanilla"
+agent_url = "http://192.168.1.16:8766"
+token_env = "MC_AGENT_TOKEN_HOST1"
+track_players = true
+```
+
+Leave the existing Velocity entry untracked. It must not contain
+`track_players = true`.
+
+#### 5. Restart Paper, the agents, and the controller
+
+On System 2:
+
+```bash
+sudo systemctl restart minecraft@lobby.service
+sudo systemctl restart mc-manager-agent
+sudo systemctl status minecraft@lobby.service mc-manager-agent --no-pager
+```
+
+On the Vanilla machine:
+
+```bash
+sudo systemctl restart papermc.service
+sudo systemctl restart mc-manager-agent
+sudo systemctl status papermc.service mc-manager-agent --no-pager
+```
+
+Finally, on the Pi:
+
+```bash
+sudo systemctl restart mc-manager-controller
+sudo systemctl status mc-manager-controller --no-pager
+```
+
+With the five-second poll and ten-second leave grace, joins and transfers
+normally appear within about 5 to 10 seconds. A leave is finalized after
+roughly 10 to 20 seconds. If a Query endpoint is temporarily unavailable, the
+monitor keeps the current messages instead of incorrectly declaring that players left.
+
+Active session message IDs are saved in
+`/var/lib/minecraft-manager/player-sessions.json`. The controller restores them
+after a service restart or `sudo update-minecraft-manager`, so an update can
+continue editing the same Discord messages rather than starting duplicates.
+
 ### LinuxGSM-managed Minecraft server
 
 For a LinuxGSM server, use the included LinuxGSM examples instead of the
@@ -308,7 +489,8 @@ not forward port `8080` through your router.
 ## 6. Update this program
 
 Configuration and secrets remain in `/etc/minecraft-manager` and are not
-replaced during updates.
+replaced during updates. Active player-session message state under
+`/var/lib/minecraft-manager` is also preserved.
 
 Update any Pi or Ubuntu installation with:
 

@@ -18,6 +18,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .client import AgentClient, AgentUnavailable
 from .config import ConfigError, ControllerConfig, RemoteServer, load_controller_config
 from .discord_bot import MinecraftDiscordBot
+from .player_monitor import PlayerPresenceMonitor
 from .ups import UPSMonitor
 
 
@@ -44,18 +45,31 @@ def create_controller_app(config: ControllerConfig) -> FastAPI:
             if config.ups.enabled
             else None
         )
+        player_monitor = (
+            PlayerPresenceMonitor(config, agents, bot)
+            if config.player_tracking.enabled
+            else None
+        )
+        player_task = (
+            asyncio.create_task(player_monitor.run())
+            if player_monitor is not None
+            else None
+        )
         app.state.bot_task = bot_task
         app.state.ups_task = ups_task
+        app.state.player_task = player_task
         try:
             yield
         finally:
             if ups_task and not ups_task.done():
                 ups_task.cancel()
+            if player_task and not player_task.done():
+                player_task.cancel()
             await bot.close()
             if not bot_task.done():
                 bot_task.cancel()
             await asyncio.gather(
-                *(task for task in (bot_task, ups_task) if task),
+                *(task for task in (bot_task, ups_task, player_task) if task),
                 return_exceptions=True,
             )
             await agents.close()

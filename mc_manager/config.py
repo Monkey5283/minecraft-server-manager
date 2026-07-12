@@ -67,6 +67,14 @@ def _string_array(raw: Any, label: str) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True)
+class PlayerQueryConfig:
+    host: str
+    port: int
+    timeout_seconds: float = 3.0
+    offline_status_codes: tuple[int, ...] = (3,)
+
+
+@dataclass(frozen=True)
 class AgentServer:
     id: str
     name: str
@@ -75,6 +83,7 @@ class AgentServer:
     scripts: dict[str, tuple[tuple[str, ...], ...]]
     timeout_seconds: int = 120
     update_timeout_seconds: int = 1800
+    player_query: PlayerQueryConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +101,16 @@ class RemoteServer:
     name: str
     agent_url: str
     token: str
+    track_players: bool = False
+
+
+@dataclass(frozen=True)
+class PlayerTrackingConfig:
+    enabled: bool = False
+    channel_id: int | None = None
+    poll_interval_seconds: float = 5.0
+    leave_grace_seconds: float = 10.0
+    state_file: Path = Path("/var/lib/minecraft-manager/player-sessions.json")
 
 
 @dataclass(frozen=True)
@@ -123,6 +142,7 @@ class ControllerConfig:
     allowed_role_ids: frozenset[int] = field(default_factory=frozenset)
     servers: tuple[RemoteServer, ...] = ()
     ups: UPSConfig = field(default_factory=UPSConfig)
+    player_tracking: PlayerTrackingConfig = field(default_factory=PlayerTrackingConfig)
 
 
 def load_agent_config(path: str | Path) -> AgentConfig:
@@ -159,6 +179,43 @@ def load_agent_config(path: str | Path) -> AgentConfig:
             )
             for name, command in raw.get("scripts", {}).items()
         }
+        raw_player_query = raw.get("player_query")
+        player_query = None
+        if raw_player_query is not None:
+            if not isinstance(raw_player_query, dict):
+                raise ConfigError(f"{server_id}.player_query must be a table")
+            query_host = str(raw_player_query.get("host", "127.0.0.1")).strip()
+            if not query_host:
+                raise ConfigError(f"{server_id}.player_query.host must not be empty")
+            query_port = int(raw_player_query.get("port", 0))
+            if not 1 <= query_port <= 65535:
+                raise ConfigError(
+                    f"{server_id}.player_query.port must be between 1 and 65535"
+                )
+            query_timeout = float(raw_player_query.get("timeout_seconds", 3))
+            if not 0.1 <= query_timeout <= 30:
+                raise ConfigError(
+                    f"{server_id}.player_query.timeout_seconds must be between 0.1 and 30"
+                )
+            raw_offline_codes = raw_player_query.get("offline_status_codes", [3])
+            if (
+                not isinstance(raw_offline_codes, list)
+                or not raw_offline_codes
+                or not all(
+                    isinstance(code, int) and not isinstance(code, bool) and 1 <= code <= 255
+                    for code in raw_offline_codes
+                )
+            ):
+                raise ConfigError(
+                    f"{server_id}.player_query.offline_status_codes must be a "
+                    "non-empty array of exit codes from 1 to 255"
+                )
+            player_query = PlayerQueryConfig(
+                host=query_host,
+                port=query_port,
+                timeout_seconds=query_timeout,
+                offline_status_codes=tuple(raw_offline_codes),
+            )
         servers.append(
             AgentServer(
                 id=server_id,
@@ -168,6 +225,7 @@ def load_agent_config(path: str | Path) -> AgentConfig:
                 scripts=scripts,
                 timeout_seconds=int(raw.get("timeout_seconds", 120)),
                 update_timeout_seconds=int(raw.get("update_timeout_seconds", 1800)),
+                player_query=player_query,
             )
         )
     if not servers:
@@ -187,6 +245,7 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
     auth = data.get("auth", {})
     discord = data.get("discord", {})
     ups = data.get("ups", {})
+    player_tracking = data.get("player_tracking", {})
 
     servers: list[RemoteServer] = []
     seen: set[str] = set()
@@ -204,6 +263,7 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
                 name=str(raw.get("name", server_id)),
                 agent_url=url,
                 token=_required_env(str(raw.get("token_env", "MC_AGENT_TOKEN"))),
+                track_players=bool(raw.get("track_players", False)),
             )
         )
     if not servers:
@@ -211,6 +271,20 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
 
     guild_id = int(discord.get("guild_id", 0)) or None
     announcement_channel_id = int(discord.get("announcement_channel_id", 0)) or None
+    player_channel_id = (
+        int(player_tracking.get("channel_id", announcement_channel_id or 0)) or None
+    )
+    player_tracking_enabled = bool(player_tracking.get("enabled", False))
+    if player_tracking_enabled and not player_channel_id:
+        raise ConfigError(
+            "player_tracking.channel_id or discord.announcement_channel_id is required "
+            "when player tracking is enabled"
+        )
+    if player_tracking_enabled and not any(server.track_players for server in servers):
+        raise ConfigError(
+            "At least one controller [[servers]] entry must set track_players = true "
+            "when player tracking is enabled"
+        )
     ups_name = str(ups.get("ups_name", "ups"))
     status_command = _string_array(
         ups.get("status_command", ["/usr/bin/upsc", ups_name, "ups.status"]),
@@ -266,5 +340,15 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
                 0, int(ups.get("local_shutdown_delay_seconds", 15))
             ),
             local_shutdown_command=local_shutdown_command,
+        ),
+        player_tracking=PlayerTrackingConfig(
+            enabled=player_tracking_enabled,
+            channel_id=player_channel_id,
+            poll_interval_seconds=max(
+                2.0, float(player_tracking.get("poll_interval_seconds", 5))
+            ),
+            leave_grace_seconds=max(
+                0.0, float(player_tracking.get("leave_grace_seconds", 10))
+            ),
         ),
     )

@@ -20,6 +20,13 @@ def test_updater_never_targets_configuration_directory():
     assert "reset --hard /etc" not in updater
 
 
+def test_controller_unit_has_persistent_player_session_state():
+    unit = (ROOT / "deploy/systemd/mc-manager-controller.service").read_text()
+
+    assert "StateDirectory=minecraft-manager" in unit
+    assert "ProtectSystem=strict" in unit
+
+
 def test_linuxgsm_override_exposes_home_and_host_tmp():
     override = (
         ROOT / "deploy/systemd/mc-manager-agent-linuxgsm.conf"

@@ -11,6 +11,13 @@ working_directory = "/srv/minecraft/survival"
 timeout_seconds = 120
 update_timeout_seconds = 1800
 
+# Optional read-only Paper player list. Paper must have enable-query=true and
+# query.port must match this UDP port. Use an address this same host can reach.
+[servers.player_query]
+host = "127.0.0.1"
+port = 25565
+timeout_seconds = 3
+
 # Every entry is an argv array (or a list of argv arrays). No shell is used.
 [servers.actions]
 start = [["sudo", "-n", "/usr/bin/systemctl", "start", "minecraft@survival.service"]]

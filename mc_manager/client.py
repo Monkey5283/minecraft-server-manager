@@ -47,6 +47,23 @@ class AgentClient:
                 return entry
         raise AgentUnavailable(f"{server.name}: server is not configured on its agent")
 
+    async def players(self, server: RemoteServer) -> tuple[str, ...]:
+        result = await self._request(
+            server,
+            "GET",
+            f"/v1/servers/{server.id}/players",
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("players"), list):
+            raise AgentUnavailable(
+                f"{server.name}: agent returned an invalid player snapshot"
+            )
+        players = result["players"]
+        if not all(isinstance(player, str) and player for player in players):
+            raise AgentUnavailable(
+                f"{server.name}: agent returned an invalid player name"
+            )
+        return tuple(players)
+
     async def action(self, server: RemoteServer, action: str) -> dict:
         result = await self._request(
             server, "POST", f"/v1/servers/{server.id}/actions/{action}"

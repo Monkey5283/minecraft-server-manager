@@ -15,11 +15,22 @@ import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 
 from .config import AgentConfig, AgentServer, ConfigError, load_agent_config
+from .minecraft_query import MinecraftQueryError, query_players
 
 
 LOG = logging.getLogger("mc_manager.agent")
 MAX_OUTPUT = 32_000
 MAX_JOBS = 200
+
+
+class CommandFailed(RuntimeError):
+    def __init__(self, executable: str, returncode: int, output: str):
+        self.executable = executable
+        self.returncode = returncode
+        self.output = output
+        super().__init__(
+            f"Command {executable} exited with code {returncode}\n{output}"
+        )
 
 
 @dataclass
@@ -69,9 +80,7 @@ class AgentRuntime:
             text = stdout.decode("utf-8", errors="replace")
             chunks.append(f"$ {command[0]}\n{text}".strip())
             if process.returncode != 0:
-                raise RuntimeError(
-                    f"Command {command[0]} exited with code {process.returncode}\n{text}"
-                )
+                raise CommandFailed(command[0], process.returncode, text)
         return "\n\n".join(chunks)[-MAX_OUTPUT:]
 
     async def run_job(
@@ -160,6 +169,70 @@ def create_agent_app(config: AgentConfig) -> FastAPI:
                 }
             )
         return results
+
+    @app.get(
+        "/v1/servers/{server_id}/players",
+        dependencies=[Depends(authenticate)],
+    )
+    async def list_players(server_id: str) -> dict:
+        server = find_server(server_id)
+        query = server.player_query
+        if query is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Player Query is not configured for this server",
+            )
+
+        try:
+            players = await query_players(
+                query.host,
+                query.port,
+                query.timeout_seconds,
+            )
+        except MinecraftQueryError as query_error:
+            # A stopped service is a reliable empty snapshot. If the service is
+            # still active, preserve the distinction between "no players" and
+            # "the read-only Query endpoint is unavailable".
+            try:
+                await runtime.execute_steps(
+                    server,
+                    server.actions["status"],
+                    min(server.timeout_seconds, 30),
+                )
+            except CommandFailed as status_error:
+                if status_error.returncode in query.offline_status_codes:
+                    return {
+                        "id": server.id,
+                        "name": server.name,
+                        "state": "offline",
+                        "players": [],
+                    }
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=(
+                        "Minecraft Query is unavailable and the status command "
+                        f"failed unexpectedly: {str(status_error)[-500:]}"
+                    ),
+                ) from status_error
+            except RuntimeError as status_error:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=(
+                        "Minecraft Query is unavailable and server status could "
+                        f"not be confirmed: {str(status_error)[-500:]}"
+                    ),
+                ) from status_error
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Minecraft Query is unavailable: {query_error}",
+            ) from query_error
+
+        return {
+            "id": server.id,
+            "name": server.name,
+            "state": "online",
+            "players": list(players),
+        }
 
     @app.post("/v1/servers/{server_id}/actions/{action}", dependencies=[Depends(authenticate)])
     async def start_action(server_id: str, action: str) -> dict:

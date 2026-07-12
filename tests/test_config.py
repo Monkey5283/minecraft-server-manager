@@ -202,3 +202,101 @@ def test_linuxgsm_example_uses_allowlisted_commands(
     )
     assert "backup" in server.scripts
     assert "update_linuxgsm" in server.scripts
+
+
+def test_agent_loads_player_query_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("TEST_AGENT_TOKEN", "secret")
+    config = tmp_path / "agent.toml"
+    config.write_text(
+        """
+[agent]
+token_env = "TEST_AGENT_TOKEN"
+
+[[servers]]
+id = "lobby"
+[servers.actions]
+start = ["service", "start"]
+stop = ["service", "stop"]
+restart = ["service", "restart"]
+status = ["service", "status"]
+[servers.player_query]
+host = "127.0.0.1"
+port = 25566
+timeout_seconds = 2.5
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_agent_config(config)
+
+    assert loaded.servers[0].player_query is not None
+    assert loaded.servers[0].player_query.host == "127.0.0.1"
+    assert loaded.servers[0].player_query.port == 25566
+    assert loaded.servers[0].player_query.timeout_seconds == 2.5
+    assert loaded.servers[0].player_query.offline_status_codes == (3,)
+
+
+def test_controller_loads_player_tracking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    for name in ("WEB", "SESSION", "DISCORD", "AGENT"):
+        monkeypatch.setenv(name, "secret")
+    config = tmp_path / "controller.toml"
+    config.write_text(
+        """
+[auth]
+web_password_env = "WEB"
+session_secret_env = "SESSION"
+[discord]
+discord_token_env = "DISCORD"
+announcement_channel_id = 456
+[player_tracking]
+enabled = true
+poll_interval_seconds = 3
+leave_grace_seconds = 12
+[[servers]]
+id = "lobby"
+agent_url = "http://192.168.1.35:8766"
+token_env = "AGENT"
+track_players = true
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_controller_config(config)
+
+    assert loaded.player_tracking.enabled is True
+    assert loaded.player_tracking.channel_id == 456
+    assert loaded.player_tracking.poll_interval_seconds == 3
+    assert loaded.player_tracking.leave_grace_seconds == 12
+    assert loaded.servers[0].track_players is True
+
+
+def test_controller_rejects_tracking_without_a_tracked_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    for name in ("WEB", "SESSION", "DISCORD", "AGENT"):
+        monkeypatch.setenv(name, "secret")
+    config = tmp_path / "controller.toml"
+    config.write_text(
+        """
+[auth]
+web_password_env = "WEB"
+session_secret_env = "SESSION"
+[discord]
+discord_token_env = "DISCORD"
+announcement_channel_id = 456
+[player_tracking]
+enabled = true
+[[servers]]
+id = "velocity"
+agent_url = "http://192.168.1.35:8766"
+token_env = "AGENT"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="track_players"):
+        load_controller_config(config)

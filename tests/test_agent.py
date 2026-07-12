@@ -1,11 +1,13 @@
 import sys
 import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
 
 from mc_manager.agent import create_agent_app
-from mc_manager.config import AgentConfig, AgentServer
+from mc_manager.config import AgentConfig, AgentServer, PlayerQueryConfig
+from mc_manager.minecraft_query import MinecraftQueryError
 
 
 async def test_agent_requires_token_and_runs_only_configured_action(tmp_path: Path):
@@ -61,3 +63,204 @@ async def test_agent_requires_token_and_runs_only_configured_action(tmp_path: Pa
 
         assert job["state"] == "succeeded"
         assert "started safely" in job["output"]
+
+
+async def test_agent_exposes_authenticated_player_snapshot(tmp_path: Path, monkeypatch):
+    ok_command = ((sys.executable, "-c", "print('online')"),)
+    server = AgentServer(
+        id="lobby",
+        name="Lobby",
+        working_directory=tmp_path,
+        actions={
+            "start": ok_command,
+            "stop": ok_command,
+            "restart": ok_command,
+            "status": ok_command,
+        },
+        scripts={},
+        player_query=PlayerQueryConfig("127.0.0.1", 25566, 2),
+    )
+    query = AsyncMock(return_value=("Monkey5283", "Builder"))
+    monkeypatch.setattr("mc_manager.agent.query_players", query)
+    app = create_agent_app(
+        AgentConfig(
+            name="test-agent",
+            bind="127.0.0.1",
+            port=8766,
+            token="test-token",
+            servers=(server,),
+        )
+    )
+    headers = {"Authorization": "Bearer test-token"}
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        assert (await client.get("/v1/servers/lobby/players")).status_code == 401
+        response = await client.get("/v1/servers/lobby/players", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["players"] == ["Monkey5283", "Builder"]
+    query.assert_awaited_once_with("127.0.0.1", 25566, 2)
+
+
+async def test_agent_does_not_report_empty_when_query_fails_for_online_server(
+    tmp_path: Path, monkeypatch
+):
+    ok_command = ((sys.executable, "-c", "print('online')"),)
+    server = AgentServer(
+        id="lobby",
+        name="Lobby",
+        working_directory=tmp_path,
+        actions={
+            "start": ok_command,
+            "stop": ok_command,
+            "restart": ok_command,
+            "status": ok_command,
+        },
+        scripts={},
+        player_query=PlayerQueryConfig("127.0.0.1", 25566),
+    )
+    monkeypatch.setattr(
+        "mc_manager.agent.query_players",
+        AsyncMock(side_effect=MinecraftQueryError("not responding")),
+    )
+    app = create_agent_app(
+        AgentConfig(
+            name="test-agent",
+            bind="127.0.0.1",
+            port=8766,
+            token="test-token",
+            servers=(server,),
+        )
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/servers/lobby/players",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 502
+    assert "unavailable" in response.json()["detail"]
+
+
+async def test_agent_rejects_player_snapshot_when_query_is_not_configured(
+    tmp_path: Path
+):
+    ok_command = ((sys.executable, "-c", "print('online')"),)
+    server = AgentServer(
+        id="velocity",
+        name="Velocity",
+        working_directory=tmp_path,
+        actions={
+            "start": ok_command,
+            "stop": ok_command,
+            "restart": ok_command,
+            "status": ok_command,
+        },
+        scripts={},
+    )
+    app = create_agent_app(
+        AgentConfig(
+            name="test-agent",
+            bind="127.0.0.1",
+            port=8766,
+            token="test-token",
+            servers=(server,),
+        )
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/servers/velocity/players",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 409
+
+
+async def test_agent_reports_empty_players_only_for_configured_offline_exit_code(
+    tmp_path: Path, monkeypatch
+):
+    ok_command = ((sys.executable, "-c", "print('ok')"),)
+    offline_command = ((sys.executable, "-c", "raise SystemExit(3)"),)
+    server = AgentServer(
+        id="lobby",
+        name="Lobby",
+        working_directory=tmp_path,
+        actions={
+            "start": ok_command,
+            "stop": ok_command,
+            "restart": ok_command,
+            "status": offline_command,
+        },
+        scripts={},
+        player_query=PlayerQueryConfig("127.0.0.1", 25566),
+    )
+    monkeypatch.setattr(
+        "mc_manager.agent.query_players",
+        AsyncMock(side_effect=MinecraftQueryError("not responding")),
+    )
+    app = create_agent_app(
+        AgentConfig(
+            name="test-agent",
+            bind="127.0.0.1",
+            port=8766,
+            token="test-token",
+            servers=(server,),
+        )
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/servers/lobby/players",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "offline"
+    assert response.json()["players"] == []
+
+
+async def test_agent_keeps_unexpected_status_failure_unknown(tmp_path: Path, monkeypatch):
+    ok_command = ((sys.executable, "-c", "print('ok')"),)
+    broken_status = ((sys.executable, "-c", "raise SystemExit(1)"),)
+    server = AgentServer(
+        id="lobby",
+        name="Lobby",
+        working_directory=tmp_path,
+        actions={
+            "start": ok_command,
+            "stop": ok_command,
+            "restart": ok_command,
+            "status": broken_status,
+        },
+        scripts={},
+        player_query=PlayerQueryConfig("127.0.0.1", 25566),
+    )
+    monkeypatch.setattr(
+        "mc_manager.agent.query_players",
+        AsyncMock(side_effect=MinecraftQueryError("not responding")),
+    )
+    app = create_agent_app(
+        AgentConfig(
+            name="test-agent",
+            bind="127.0.0.1",
+            port=8766,
+            token="test-token",
+            servers=(server,),
+        )
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/servers/lobby/players",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 502
+    assert "failed unexpectedly" in response.json()["detail"]

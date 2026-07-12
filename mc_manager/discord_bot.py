@@ -238,6 +238,135 @@ class MinecraftDiscordBot(discord.Client):
         except (asyncio.TimeoutError, discord.DiscordException, TypeError):
             LOG.exception("Could not send Discord announcement to channel %s", channel_id)
 
+    async def start_player_session(
+        self,
+        channel_id: int,
+        player_name: str,
+        server_name: str,
+        started_at: float,
+    ) -> int | None:
+        content = self._player_session_content(
+            player_name,
+            server_name,
+            started_at,
+            event="joined",
+        )
+        return await self._send_player_session(channel_id, content)
+
+    async def update_player_session(
+        self,
+        channel_id: int,
+        message_id: int,
+        player_name: str,
+        server_name: str,
+        started_at: float,
+    ) -> int | None:
+        content = self._player_session_content(
+            player_name,
+            server_name,
+            started_at,
+            event="online",
+        )
+        return await self._edit_player_session(channel_id, message_id, content)
+
+    async def finish_player_session(
+        self,
+        channel_id: int,
+        message_id: int,
+        player_name: str,
+        server_name: str,
+        started_at: float,
+        ended_at: float,
+    ) -> int | None:
+        content = self._player_session_content(
+            player_name,
+            server_name,
+            started_at,
+            event="left",
+            ended_at=ended_at,
+        )
+        return await self._edit_player_session(channel_id, message_id, content)
+
+    async def _send_player_session(self, channel_id: int, content: str) -> int | None:
+        try:
+            channel = await self._resolve_message_channel(channel_id)
+            message = await channel.send(
+                content,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return int(message.id)
+        except (asyncio.TimeoutError, discord.DiscordException, TypeError, ValueError):
+            LOG.exception("Could not send player session message to channel %s", channel_id)
+            return None
+
+    async def _edit_player_session(
+        self,
+        channel_id: int,
+        message_id: int,
+        content: str,
+    ) -> int | None:
+        try:
+            channel = await self._resolve_message_channel(channel_id)
+            if hasattr(channel, "get_partial_message"):
+                message = channel.get_partial_message(message_id)
+            elif hasattr(channel, "fetch_message"):
+                message = await channel.fetch_message(message_id)
+            else:
+                raise TypeError("configured channel does not support message edits")
+            await message.edit(
+                content=content,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return message_id
+        except discord.NotFound:
+            LOG.warning(
+                "Player session message %s no longer exists; creating a replacement",
+                message_id,
+            )
+            return await self._send_player_session(channel_id, content)
+        except (asyncio.TimeoutError, discord.DiscordException, TypeError):
+            LOG.exception("Could not edit player session message %s", message_id)
+            return None
+
+    async def _resolve_message_channel(self, channel_id: int):
+        if not self.is_ready():
+            await asyncio.wait_for(self.wait_until_ready(), timeout=30)
+        channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
+        if not hasattr(channel, "send"):
+            raise TypeError("configured channel does not support messages")
+        return channel
+
+    @staticmethod
+    def _player_session_content(
+        player_name: str,
+        server_name: str,
+        started_at: float,
+        *,
+        event: str,
+        ended_at: float | None = None,
+    ) -> str:
+        player = discord.utils.escape_markdown(player_name)
+        server = discord.utils.escape_markdown(server_name)
+        started = int(started_at)
+        if event == "joined":
+            return (
+                f"🟢 **{player} joined Minecraft**\n"
+                f"Current server: **{server}**\n"
+                f"Session started: <t:{started}:R>"
+            )
+        if event == "online":
+            return (
+                f"🔄 **{player} is playing Minecraft**\n"
+                f"Current server: **{server}**\n"
+                f"Session started: <t:{started}:R>"
+            )
+        ended = int(ended_at if ended_at is not None else started_at)
+        return (
+            f"⚪ **{player} left Minecraft**\n"
+            f"Last server: **{server}**\n"
+            f"Joined: <t:{started}:f> · Left: <t:{ended}:f>"
+        )
+
     async def _send_startup_server_status(
         self, channel: discord.abc.Messageable
     ) -> None:

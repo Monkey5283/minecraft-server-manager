@@ -20,6 +20,14 @@ announcement_channel_id = 123456789012345678
 allowed_user_ids = [123456789012345678]
 allowed_role_ids = [123456789012345678]
 
+[player_tracking]
+# Optional Discord messages for Paper player sessions. The message is edited
+# when a player changes servers and finalized when they leave the network.
+enabled = false
+# Uses discord.announcement_channel_id when channel_id is omitted.
+poll_interval_seconds = 5
+leave_grace_seconds = 10
+
 [ups]
 # Optional NUT integration for a USB UPS attached to the Pi controller.
 # For your CyberPower SX950U, configure NUT first, then set ups_name to the
@@ -39,13 +47,22 @@ local_shutdown_delay_seconds = 15
 local_shutdown_command = ["/usr/bin/systemctl", "poweroff"]
 
 [[servers]]
-id = "survival"
-name = "Survival"
-agent_url = "http://192.168.1.31:8766"
-token_env = "MC_AGENT_TOKEN_HOST1"
+id = "velocity"
+name = "Velocity"
+agent_url = "http://192.168.1.35:8766"
+token_env = "MC_AGENT_TOKEN_HOST2"
+# Velocity is the proxy, not a Paper backend. Do not set track_players here.
 
 [[servers]]
-id = "creative"
-name = "Creative"
-agent_url = "http://192.168.1.32:8766"
+id = "lobby"
+name = "Lobby"
+agent_url = "http://192.168.1.35:8766"
 token_env = "MC_AGENT_TOKEN_HOST2"
+track_players = true
+
+[[servers]]
+id = "survival"
+name = "Vanilla"
+agent_url = "http://192.168.1.16:8766"
+token_env = "MC_AGENT_TOKEN_HOST1"
+track_players = true
