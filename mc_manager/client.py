@@ -40,12 +40,23 @@ class AgentClient:
             raise AgentUnavailable(f"{server.name}: agent is unreachable") from exc
 
     async def status(self, server: RemoteServer) -> dict:
-        entries = await self._request(server, "GET", "/v1/servers")
-        assert isinstance(entries, list)
-        for entry in entries:
-            if entry["id"] == server.id:
-                return entry
+        entries = await self.statuses(server)
+        if server.id in entries:
+            return entries[server.id]
         raise AgentUnavailable(f"{server.name}: server is not configured on its agent")
+
+    async def statuses(self, server: RemoteServer) -> dict[str, dict]:
+        entries = await self._request(server, "GET", "/v1/servers")
+        if not isinstance(entries, list):
+            raise AgentUnavailable(f"{server.name}: agent returned an invalid status list")
+        results: dict[str, dict] = {}
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+                raise AgentUnavailable(
+                    f"{server.name}: agent returned an invalid server status"
+                )
+            results[entry["id"]] = entry
+        return results
 
     async def players(self, server: RemoteServer) -> tuple[str, ...]:
         result = await self._request(

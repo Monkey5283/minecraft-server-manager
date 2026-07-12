@@ -16,6 +16,10 @@ discord_token_env = "DISCORD_BOT_TOKEN"
 guild_id = 123456789012345678
 # Optional: post once here whenever the controller process comes online.
 announcement_channel_id = 123456789012345678
+# Show the controller health on the bot member as:
+# Watching Minecraft servers • All Good, Caution, or Attention.
+health_presence_enabled = true
+health_poll_interval_seconds = 30
 # A Discord administrator is always permitted. These lists grant other access.
 allowed_user_ids = [123456789012345678]
 allowed_role_ids = [123456789012345678]
@@ -37,6 +41,10 @@ ups_name = "cyberpower"
 status_command = ["/usr/bin/upsc", "cyberpower", "ups.status"]
 # Optional. Defaults to the same upsc target as status_command.
 charge_command = ["/usr/bin/upsc", "cyberpower", "battery.charge"]
+# Keep one editable UPS status message in Discord. It uses the announcement
+# channel unless discord_status_channel_id is set to another text channel ID.
+discord_status_enabled = true
+# discord_status_channel_id = 123456789012345678
 # If NUT reports OB or LB for this long, the controller starts shutdown steps.
 on_battery_delay_seconds = 30
 poll_interval_seconds = 15

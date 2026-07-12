@@ -180,6 +180,74 @@ token_env = "AGENT"
     )
 
 
+def test_controller_defaults_health_presence_and_ups_card_to_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    for name in ("WEB", "SESSION", "DISCORD", "AGENT"):
+        monkeypatch.setenv(name, "secret")
+    config = tmp_path / "controller.toml"
+    config.write_text(
+        """
+[auth]
+web_password_env = "WEB"
+session_secret_env = "SESSION"
+[discord]
+discord_token_env = "DISCORD"
+announcement_channel_id = 456
+[ups]
+enabled = true
+[[servers]]
+id = "survival"
+agent_url = "http://192.168.1.20:8766"
+token_env = "AGENT"
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_controller_config(config)
+
+    assert loaded.health_presence_enabled is True
+    assert loaded.health_poll_interval_seconds == 30
+    assert loaded.ups.discord_status_enabled is True
+    assert loaded.ups.discord_status_channel_id == 456
+
+
+def test_controller_loads_health_toggles_and_custom_ups_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    for name in ("WEB", "SESSION", "DISCORD", "AGENT"):
+        monkeypatch.setenv(name, "secret")
+    config = tmp_path / "controller.toml"
+    config.write_text(
+        """
+[auth]
+web_password_env = "WEB"
+session_secret_env = "SESSION"
+[discord]
+discord_token_env = "DISCORD"
+announcement_channel_id = 456
+health_presence_enabled = false
+health_poll_interval_seconds = 12
+[ups]
+enabled = true
+discord_status_enabled = false
+discord_status_channel_id = 789
+[[servers]]
+id = "survival"
+agent_url = "http://192.168.1.20:8766"
+token_env = "AGENT"
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_controller_config(config)
+
+    assert loaded.health_presence_enabled is False
+    assert loaded.health_poll_interval_seconds == 12
+    assert loaded.ups.discord_status_enabled is False
+    assert loaded.ups.discord_status_channel_id == 789
+
+
 def test_linuxgsm_example_uses_allowlisted_commands(
     monkeypatch: pytest.MonkeyPatch,
 ):

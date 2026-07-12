@@ -55,6 +55,20 @@ that should receive a message whenever the controller comes online. Enable
 Discord Developer Mode, right-click the channel, and choose **Copy Channel ID**.
 Set it to `0` to disable announcements.
 
+The bot also uses this channel for its editable UPS status message unless a
+different UPS status channel is configured. Give the bot **View Channel** and
+**Send Messages** permissions in that channel. It does not need a new Discord
+secret, privileged intent, or **Manage Messages** permission.
+
+The health presence is enabled by default. These optional settings make the
+defaults explicit:
+
+```toml
+[discord]
+health_presence_enabled = true
+health_poll_interval_seconds = 30
+```
+
 Then open the secret file:
 
 ```bash
@@ -102,6 +116,9 @@ enabled = true
 ups_name = "cyberpower"
 status_command = ["/usr/bin/upsc", "cyberpower@localhost", "ups.status"]
 charge_command = ["/usr/bin/upsc", "cyberpower@localhost", "battery.charge"]
+discord_status_enabled = true
+# Optional; omit this to use discord.announcement_channel_id.
+# discord_status_channel_id = 123456789012345678
 poll_interval_seconds = 15
 on_battery_delay_seconds = 30
 stop_timeout_seconds = 180
@@ -116,12 +133,48 @@ back during that delay, it announces that shutdown was canceled. If the UPS is
 still on battery after the delay, the controller will:
 
 1. send `stop` to each configured Minecraft server;
-2. run the agent script named `shutdown_host` when that script exists;
+2. after every service on a machine stops cleanly, run its `shutdown_host`
+   script once for that machine;
 3. announce that the Pi is shutting down;
 4. run the local Pi shutdown command.
 
 Discord also gets an `/ups` slash command that shows line/battery status and
 current battery charge.
+
+### Live Discord health status
+
+After the Pi controller is updated, its Discord health display works
+automatically. Existing `controller.toml` files do not need the new lines:
+`health_presence_enabled` and `discord_status_enabled` both default to `true`,
+and the UPS status message defaults to `discord.announcement_channel_id`.
+The editable UPS message appears when `[ups].enabled = true` and a Discord
+channel is configured.
+
+The controller keeps one UPS message and edits it instead of posting a new one
+on every check. It shows:
+
+- current line-power or battery state;
+- battery percentage;
+- overall health level;
+- a summary of online, busy, offline, unreachable, and unknown servers; and
+- when the information last changed.
+
+The bot member's activity changes to **Watching Minecraft servers • All Good**,
+**Caution**, or **Attention**. The controller evaluates server health every 30
+seconds and also reacts to UPS changes:
+
+- **All Good:** every configured server is online and the UPS reports normal
+  line power (`OL`).
+- **Caution:** a server is offline or busy, the battery charge is unknown, or
+  NUT reports a warning state.
+- **Attention:** an agent/server is unreachable or reports an unknown/error
+  state, or the UPS is unavailable, on battery, or entering a shutdown state.
+
+The message ID is stored at
+`/var/lib/minecraft-manager/ups-status-card.json`. It survives controller
+restarts and program updates, so the controller resumes editing the same
+message. If that Discord message is deleted, the controller creates one
+replacement and stores its new ID.
 
 Install the Polkit rule that lets the controller service user power off the Pi:
 
@@ -489,8 +542,8 @@ not forward port `8080` through your router.
 ## 6. Update this program
 
 Configuration and secrets remain in `/etc/minecraft-manager` and are not
-replaced during updates. Active player-session message state under
-`/var/lib/minecraft-manager` is also preserved.
+replaced during updates. Active player-session state and the editable UPS card
+ID under `/var/lib/minecraft-manager` are also preserved.
 
 Update any Pi or Ubuntu installation with:
 
@@ -501,6 +554,10 @@ sudo update-minecraft-manager
 The updater pulls the latest `main` branch, installs dependencies, and restarts
 the correct service. If the new service fails to stay active, it restores the
 previous commit automatically.
+
+On the Pi, the live UPS card and health presence use their enabled-by-default
+settings even when the existing TOML does not contain those new options. No new
+token, secret, Discord intent, or manual configuration migration is required.
 
 ## 7. Configure Minecraft jar updates
 
@@ -527,6 +584,7 @@ Vanilla may require provider-specific download scripts.
 | `/etc/minecraft-manager/agent.toml` | Allowed actions on an Ubuntu host |
 | `/etc/minecraft-manager/agent.env` | Ubuntu agent token |
 | `/etc/minecraft-manager/update.env` | Program update source |
+| `/var/lib/minecraft-manager/ups-status-card.json` | Persisted editable UPS message ID |
 
 Never commit files from `/etc/minecraft-manager` or paste their contents into
 Discord.

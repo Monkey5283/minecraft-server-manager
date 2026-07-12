@@ -125,6 +125,8 @@ class UPSConfig:
     downstream_shutdown_script: str = "shutdown_host"
     local_shutdown_delay_seconds: int = 15
     local_shutdown_command: tuple[str, ...] = ("/usr/bin/systemctl", "poweroff")
+    discord_status_enabled: bool = True
+    discord_status_channel_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +145,8 @@ class ControllerConfig:
     servers: tuple[RemoteServer, ...] = ()
     ups: UPSConfig = field(default_factory=UPSConfig)
     player_tracking: PlayerTrackingConfig = field(default_factory=PlayerTrackingConfig)
+    health_presence_enabled: bool = True
+    health_poll_interval_seconds: float = 30.0
 
 
 def load_agent_config(path: str | Path) -> AgentConfig:
@@ -271,6 +275,9 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
 
     guild_id = int(discord.get("guild_id", 0)) or None
     announcement_channel_id = int(discord.get("announcement_channel_id", 0)) or None
+    ups_status_channel_id = (
+        int(ups.get("discord_status_channel_id", announcement_channel_id or 0)) or None
+    )
     player_channel_id = (
         int(player_tracking.get("channel_id", announcement_channel_id or 0)) or None
     )
@@ -340,6 +347,8 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
                 0, int(ups.get("local_shutdown_delay_seconds", 15))
             ),
             local_shutdown_command=local_shutdown_command,
+            discord_status_enabled=bool(ups.get("discord_status_enabled", True)),
+            discord_status_channel_id=ups_status_channel_id,
         ),
         player_tracking=PlayerTrackingConfig(
             enabled=player_tracking_enabled,
@@ -350,5 +359,9 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
             leave_grace_seconds=max(
                 0.0, float(player_tracking.get("leave_grace_seconds", 10))
             ),
+        ),
+        health_presence_enabled=bool(discord.get("health_presence_enabled", True)),
+        health_poll_interval_seconds=max(
+            10.0, float(discord.get("health_poll_interval_seconds", 30))
         ),
     )

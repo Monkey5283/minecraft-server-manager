@@ -18,6 +18,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .client import AgentClient, AgentUnavailable
 from .config import ConfigError, ControllerConfig, RemoteServer, load_controller_config
 from .discord_bot import MinecraftDiscordBot
+from .health import ControllerHealthMonitor
 from .player_monitor import PlayerPresenceMonitor
 from .ups import UPSMonitor
 
@@ -33,15 +34,71 @@ class LoginRequest(BaseModel):
 
 def create_controller_app(config: ControllerConfig) -> FastAPI:
     agents = AgentClient()
-    bot = MinecraftDiscordBot(config, agents)
+    bot = MinecraftDiscordBot(
+        config,
+        agents,
+        health_state_file=Path(
+            "/var/lib/minecraft-manager/ups-status-card.json"
+        ),
+    )
     servers = {server.id: server for server in config.servers}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         bot_task = asyncio.create_task(bot.start(config.discord_token))
-        ups_monitor = UPSMonitor(config, agents, bot.announce)
+        health_enabled = config.health_presence_enabled or (
+            config.ups.enabled
+            and config.ups.discord_status_enabled
+            and config.ups.discord_status_channel_id is not None
+        )
+        health_monitor = (
+            ControllerHealthMonitor(config, agents, bot)
+            if health_enabled
+            else None
+        )
+
+        async def supervise_health(monitor: ControllerHealthMonitor) -> None:
+            while True:
+                try:
+                    await monitor.run()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    LOG.exception("Health monitor stopped unexpectedly; retrying")
+                else:
+                    LOG.error("Health monitor ended unexpectedly; retrying")
+                await asyncio.sleep(5)
+
+        health_task = (
+            asyncio.create_task(supervise_health(health_monitor))
+            if health_monitor is not None
+            else None
+        )
+
+        async def supervise_ups() -> None:
+            while True:
+                monitor = UPSMonitor(
+                    config,
+                    agents,
+                    bot.announce,
+                    status_sink=(
+                        health_monitor.update_ups
+                        if health_monitor is not None
+                        else None
+                    ),
+                )
+                try:
+                    await monitor.run()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    LOG.exception("UPS monitor stopped unexpectedly; retrying")
+                else:
+                    LOG.warning("UPS monitor ended while controller is running; retrying")
+                await asyncio.sleep(5)
+
         ups_task = (
-            asyncio.create_task(ups_monitor.run())
+            asyncio.create_task(supervise_ups())
             if config.ups.enabled
             else None
         )
@@ -56,22 +113,25 @@ def create_controller_app(config: ControllerConfig) -> FastAPI:
             else None
         )
         app.state.bot_task = bot_task
+        app.state.health_task = health_task
         app.state.ups_task = ups_task
         app.state.player_task = player_task
         try:
             yield
         finally:
-            if ups_task and not ups_task.done():
-                ups_task.cancel()
-            if player_task and not player_task.done():
-                player_task.cancel()
+            background_tasks = tuple(
+                task
+                for task in (health_task, ups_task, player_task)
+                if task is not None
+            )
+            for task in background_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*background_tasks, return_exceptions=True)
             await bot.close()
             if not bot_task.done():
                 bot_task.cancel()
-            await asyncio.gather(
-                *(task for task in (bot_task, ups_task, player_task) if task),
-                return_exceptions=True,
-            )
+            await asyncio.gather(bot_task, return_exceptions=True)
             await agents.close()
 
     app = FastAPI(
