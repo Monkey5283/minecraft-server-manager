@@ -49,6 +49,53 @@ def make_health_snapshot(
     )
 
 
+def test_successful_update_message_includes_agent_result() -> None:
+    target = RemoteServer(
+        id="lobby",
+        name="Lobby",
+        agent_url="http://192.168.1.35:8766",
+        token="token",
+    )
+
+    message = MinecraftDiscordBot._job_result_message(
+        target,
+        {
+            "state": "succeeded",
+            "operation": "update",
+            "output": (
+                "lobby is already running Paper 26.1.2 stable build 81; "
+                "no restart needed"
+            ),
+        },
+        "job-1",
+    )
+
+    assert "`update` completed" in message
+    assert "already running Paper 26.1.2 stable build 81" in message
+
+
+def test_non_update_success_message_does_not_include_command_output() -> None:
+    target = RemoteServer(
+        id="lobby",
+        name="Lobby",
+        agent_url="http://192.168.1.35:8766",
+        token="token",
+    )
+
+    message = MinecraftDiscordBot._job_result_message(
+        target,
+        {
+            "state": "succeeded",
+            "operation": "restart",
+            "output": "internal command output",
+        },
+        "job-2",
+    )
+
+    assert "`restart` completed" in message
+    assert "internal command output" not in message
+
+
 async def test_online_announcement_is_sent_only_once(monkeypatch):
     config = ControllerConfig(
         bind="127.0.0.1",

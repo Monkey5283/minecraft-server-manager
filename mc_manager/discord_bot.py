@@ -165,18 +165,7 @@ class MinecraftDiscordBot(discord.Client):
                 else:
                     job = await self.agents.action(target, action.value)
                 result = await self._wait_for_job(target, job["id"])
-                if result["state"] == "succeeded":
-                    message = f"**{target.name}**: `{result['operation']}` completed."
-                elif result["state"] == "failed":
-                    message = (
-                        f"**{target.name}**: `{result['operation']}` failed.\n"
-                        f"```{str(result.get('error', 'Unknown error'))[-1500:]}```"
-                    )
-                else:
-                    message = (
-                        f"**{target.name}**: operation is still running "
-                        f"(job `{job['id']}`). Check the web UI."
-                    )
+                message = self._job_result_message(target, result, job["id"])
                 await interaction.followup.send(message, ephemeral=True)
             except AgentUnavailable as exc:
                 await interaction.followup.send(str(exc), ephemeral=True)
@@ -219,6 +208,28 @@ class MinecraftDiscordBot(discord.Client):
                 return job
             await asyncio.sleep(2)
         return await self.agents.job(server, job_id)
+
+    @staticmethod
+    def _job_result_message(
+        target: RemoteServer,
+        result: dict,
+        job_id: str,
+    ) -> str:
+        operation = str(result.get("operation", "operation"))
+        if result.get("state") == "succeeded":
+            message = f"**{target.name}**: `{operation}` completed."
+            output = str(result.get("output", "")).strip()
+            if operation == "update" and output:
+                safe_output = output[-1400:].replace("```", "` ` `")
+                message += f"\n```text\n{safe_output}\n```"
+            return message
+        if result.get("state") == "failed":
+            error = str(result.get("error", "Unknown error"))[-1500:]
+            return f"**{target.name}**: `{operation}` failed.\n```{error}```"
+        return (
+            f"**{target.name}**: operation is still running "
+            f"(job `{job_id}`). Check the web UI."
+        )
 
     async def setup_hook(self) -> None:
         if self.config.discord_guild_id:

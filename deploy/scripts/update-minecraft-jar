@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 if [[ $# -ne 1 || ! "$1" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]]; then
   echo "usage: update-minecraft-jar SERVER_ID" >&2
@@ -7,43 +7,198 @@ if [[ $# -ne 1 || ! "$1" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]]; then
 fi
 
 server_id="$1"
-server_dir="/srv/minecraft/${server_id}"
 settings="/etc/minecraft/${server_id}-update.env"
-service="minecraft@${server_id}.service"
 
 if [[ ! -f "$settings" ]]; then
   echo "missing update settings: $settings" >&2
   exit 1
 fi
 
-# Expected values:
-# DOWNLOAD_URL=https://provider.example/server.jar
-# SHA256=full-lowercase-sha256
-source "$settings"
-: "${DOWNLOAD_URL:?DOWNLOAD_URL is required}"
-: "${SHA256:?SHA256 is required}"
-if [[ ! "$DOWNLOAD_URL" =~ ^https?:// ]] || [[ ! "$SHA256" =~ ^[a-fA-F0-9]{64}$ ]]; then
-  echo "DOWNLOAD_URL or SHA256 has an invalid format" >&2
+settings_owner="$(stat --format='%u' "$settings")"
+settings_mode="$(stat --format='%a' "$settings")"
+if [[ "$settings_owner" != "0" ]] || (( (8#$settings_mode & 0022) != 0 )); then
+  echo "update settings must be owned by root and not writable by group or others: $settings" >&2
   exit 1
 fi
 
-tmp="$(mktemp)"
-backup="${server_dir}/server.jar.pre-update"
-trap 'rm -f "$tmp"' EXIT
+# The settings file is root-managed. Static mode remains backward compatible
+# with existing DOWNLOAD_URL/SHA256 files. Paper mode resolves the latest
+# stable build for one explicitly configured Minecraft version.
+# shellcheck disable=SC1090
+source "$settings"
 
-curl --fail --location --silent --show-error --output "$tmp" -- "$DOWNLOAD_URL"
-echo "${SHA256}  ${tmp}" | sha256sum --check -
+update_provider="${UPDATE_PROVIDER:-static}"
+server_dir="${SERVER_DIR:-/srv/minecraft/${server_id}}"
+jar_name="${JAR_NAME:-server.jar}"
+service="${SERVICE_NAME:-minecraft@${server_id}.service}"
+user_agent="minecraft-server-manager/0.1.0 (https://github.com/Monkey5283/minecraft-server-manager)"
+
+if [[ ! "$server_dir" =~ ^/srv/minecraft/[A-Za-z0-9._/-]+$ ]]; then
+  echo "SERVER_DIR must be below /srv/minecraft" >&2
+  exit 1
+fi
+server_dir="$(realpath --canonicalize-missing -- "$server_dir")"
+if [[ "$server_dir" != /srv/minecraft/* ]]; then
+  echo "SERVER_DIR must resolve below /srv/minecraft" >&2
+  exit 1
+fi
+if [[ ! "$jar_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.jar$ ]]; then
+  echo "JAR_NAME must be a jar filename without directories" >&2
+  exit 1
+fi
+if [[ ! "$service" =~ ^[A-Za-z0-9@_.-]+\.service$ ]]; then
+  echo "SERVICE_NAME has an invalid format" >&2
+  exit 1
+fi
+jar_path="${server_dir}/${jar_name}"
+backup="${jar_path}.pre-update"
+if [[ ! -f "$jar_path" ]]; then
+  echo "server jar does not exist: $jar_path" >&2
+  exit 1
+fi
+
+download_url=""
+expected_sha256=""
+target_description=""
+download_name=""
+
+case "$update_provider" in
+  static)
+    : "${DOWNLOAD_URL:?DOWNLOAD_URL is required for static updates}"
+    : "${SHA256:?SHA256 is required for static updates}"
+    download_url="$DOWNLOAD_URL"
+    expected_sha256="$SHA256"
+    download_name="$(basename -- "$download_url")"
+    target_description="the configured jar"
+    ;;
+  paper)
+    : "${PAPER_VERSION:?PAPER_VERSION is required for Paper updates}"
+    if [[ ! "$PAPER_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$ ]]; then
+      echo "PAPER_VERSION has an invalid format" >&2
+      exit 1
+    fi
+    resolver="/opt/minecraft-manager/venv/bin/mc-manager-resolve-paper"
+    if [[ ! -x "$resolver" ]]; then
+      echo "Paper resolver is missing; run sudo update-minecraft-manager first" >&2
+      exit 1
+    fi
+    if ! metadata="$($resolver --version "$PAPER_VERSION")"; then
+      exit 1
+    fi
+    mapfile -t paper_fields <<< "$metadata"
+    if [[ ${#paper_fields[@]} -ne 4 ]]; then
+      echo "Paper resolver returned invalid metadata" >&2
+      exit 1
+    fi
+    paper_build="${paper_fields[0]}"
+    download_url="${paper_fields[1]}"
+    expected_sha256="${paper_fields[2]}"
+    download_name="${paper_fields[3]}"
+    target_description="Paper ${PAPER_VERSION} stable build ${paper_build}"
+    ;;
+  *)
+    echo "UPDATE_PROVIDER must be 'static' or 'paper'" >&2
+    exit 1
+    ;;
+esac
+
+if [[ ! "$download_url" =~ ^https:// ]] ||
+   [[ ! "$expected_sha256" =~ ^[a-fA-F0-9]{64}$ ]]; then
+  echo "download URL or SHA256 has an invalid format" >&2
+  exit 1
+fi
+
+current_sha256="$(sha256sum "$jar_path" | awk '{print $1}')"
+if [[ "${current_sha256,,}" == "${expected_sha256,,}" ]]; then
+  echo "${server_id} is already running ${target_description}; no restart needed"
+  exit 0
+fi
+
+tmp="$(mktemp --tmpdir "minecraft-manager-${server_id}.XXXXXX.jar")"
+cleanup() {
+  rm -f -- "$tmp"
+}
+trap cleanup EXIT
+
+curl \
+  --fail \
+  --location \
+  --silent \
+  --show-error \
+  --header "User-Agent: ${user_agent}" \
+  --output "$tmp" \
+  -- "$download_url"
+echo "${expected_sha256}  ${tmp}" | sha256sum --check -
 jar --list --file "$tmp" >/dev/null
 
-systemctl stop "$service"
-cp --preserve=mode,ownership,timestamps "${server_dir}/server.jar" "$backup"
-install --owner=minecraft --group=minecraft --mode=0644 "$tmp" "${server_dir}/server.jar"
+service_touched=false
+backup_ready=false
+new_installed=false
 
-if ! systemctl start "$service"; then
-  echo "new server failed to start; restoring previous jar" >&2
-  install --owner=minecraft --group=minecraft --mode=0644 "$backup" "${server_dir}/server.jar"
-  systemctl start "$service"
-  exit 1
+handle_update_failure() {
+  local result="${1:-1}"
+  local reason="${2:-update command failed}"
+  trap - ERR INT TERM
+  if [[ "$result" -eq 0 ]]; then
+    result=1
+  fi
+  echo "$reason; restoring the previous server jar" >&2
+  if [[ "$service_touched" == true ]]; then
+    systemctl stop "$service" >/dev/null 2>&1 || true
+    if [[ "$backup_ready" == true && "$new_installed" == true ]]; then
+      if ! install \
+          --owner=minecraft \
+          --group=minecraft \
+          --mode=0644 \
+          "$backup" \
+          "$jar_path"; then
+        echo "CRITICAL: could not restore the previous jar at ${jar_path}" >&2
+      fi
+    fi
+    if systemctl start "$service"; then
+      echo "previous server jar restored and service restarted" >&2
+    else
+      echo "CRITICAL: could not restart ${service} after rollback" >&2
+    fi
+  fi
+  exit "$result"
+}
+
+wait_for_service() {
+  local healthy_checks=0
+  local attempt
+  for attempt in {1..30}; do
+    sleep 1
+    if systemctl is-active --quiet "$service"; then
+      healthy_checks=$((healthy_checks + 1))
+      if [[ "$healthy_checks" -ge 10 ]]; then
+        return 0
+      fi
+    else
+      healthy_checks=0
+    fi
+  done
+  return 1
+}
+
+trap 'handle_update_failure $? "update command failed"' ERR INT TERM
+service_touched=true
+systemctl stop "$service"
+cp --preserve=mode,ownership,timestamps "$jar_path" "$backup"
+backup_ready=true
+new_installed=true
+install \
+  --owner=minecraft \
+  --group=minecraft \
+  --mode=0644 \
+  "$tmp" \
+  "$jar_path"
+systemctl start "$service"
+
+if ! wait_for_service; then
+  handle_update_failure 1 "new server did not stay active"
 fi
 
-echo "updated ${server_id}; previous jar saved as ${backup}"
+service_touched=false
+trap - ERR INT TERM
+echo "updated ${server_id} to ${target_description} (${download_name}); previous jar saved as ${backup}"

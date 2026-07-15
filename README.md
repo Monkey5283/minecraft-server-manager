@@ -448,6 +448,13 @@ Active session message IDs are saved in
 after a service restart or `sudo update-minecraft-manager`, so an update can
 continue editing the same Discord messages rather than starting duplicates.
 
+### Bedrock cross-play and clickable server navigation
+
+The managed network-plugin setup installs Geyser and Floodgate on Velocity,
+ViaVersion on both Paper backends, and a compass-based Lobby server selector.
+See [docs/network-plugins.md](docs/network-plugins.md) for the exact install,
+sudo, agent, firewall, and verification steps.
+
 ### LinuxGSM-managed Minecraft server
 
 For a LinuxGSM server, use the included LinuxGSM examples instead of the
@@ -561,19 +568,103 @@ token, secret, Discord intent, or manual configuration migration is required.
 
 ## 7. Configure Minecraft jar updates
 
-The example agent action uses the included safe jar updater. On an Ubuntu host,
-create `/etc/minecraft/SERVER_ID-update.env`, for example:
+The included updater can discover the newest **stable** Paper build when you
+choose **Apply update** in Discord. It only updates the Minecraft version you
+explicitly configure; it will not jump from one Minecraft version to another.
 
-```ini
-DOWNLOAD_URL=https://trusted-provider.example/server.jar
-SHA256=expected-64-character-sha256
+First, update the program on the Pi controller and each Ubuntu agent:
+
+```bash
+sudo update-minecraft-manager
 ```
 
-The updater verifies the checksum before stopping Minecraft. If the updated
-server fails to start, it restores the previous jar.
+### Lobby on System 2
 
-Different server types discover updates differently. Paper, Fabric, Forge, and
-Vanilla may require provider-specific download scripts.
+On `192.168.1.35`, replace `/etc/minecraft/lobby-update.env` with:
+
+```ini
+UPDATE_PROVIDER=paper
+PAPER_VERSION=26.1.2
+SERVICE_NAME=minecraft@lobby.service
+SERVER_DIR=/srv/minecraft/lobby
+JAR_NAME=server.jar
+```
+
+Secure and check the file:
+
+```bash
+sudo chown root:root /etc/minecraft/lobby-update.env
+sudo chmod 600 /etc/minecraft/lobby-update.env
+sudo /usr/local/sbin/update-minecraft-jar lobby
+```
+
+The last command is a safe direct test. If build 74 is still the newest stable
+build, it reports that Lobby is already current and does not restart it. If a
+newer stable build exists, it downloads and verifies that jar, replaces
+`server.jar`, and restarts `minecraft@lobby.service`.
+
+### Vanilla Paper server
+
+On `192.168.1.16`, first confirm the directory and jar filename:
+
+```bash
+sudo systemctl show papermc.service \
+  -p WorkingDirectory -p ExecStart --no-pager
+```
+
+If it shows `/srv/minecraft/survival` and `-jar server.jar`, use
+`/etc/minecraft/survival-update.env`:
+
+```ini
+UPDATE_PROVIDER=paper
+PAPER_VERSION=26.1.2
+SERVICE_NAME=papermc.service
+SERVER_DIR=/srv/minecraft/survival
+JAR_NAME=server.jar
+```
+
+Then secure and test it:
+
+```bash
+sudo chown root:root /etc/minecraft/survival-update.env
+sudo chmod 600 /etc/minecraft/survival-update.env
+sudo /usr/local/sbin/update-minecraft-jar survival
+```
+
+If `ExecStart` names a different jar, put that exact filename in `JAR_NAME`.
+The server ID in the env filename and command must match the ID in the agent's
+`agent.toml`.
+
+After the direct test, use Discord's **Apply update** action normally. Its reply
+shows whether it installed a particular Paper stable build or skipped the
+restart because that build was already installed.
+
+The updater uses PaperMC's official downloads service with an identifying
+User-Agent, verifies the published SHA-256 checksum and jar structure before it
+stops Minecraft, saves the old jar as `server.jar.pre-update`, and rolls back if
+the service does not remain active. Paper recommends making a backup and being
+present for an update in case a plugin is incompatible. Run the manager's
+**backup** script first, especially when changing `PAPER_VERSION`.
+
+Official references: [PaperMC downloads service](https://docs.papermc.io/misc/downloads-service/)
+and [updating Paper](https://docs.papermc.io/paper/updating/).
+
+### Fixed URL mode
+
+For a non-Paper server or a deliberately pinned jar, static mode remains
+available:
+
+```ini
+UPDATE_PROVIDER=static
+DOWNLOAD_URL=https://trusted-provider.example/server.jar
+SHA256=expected-64-character-sha256
+SERVICE_NAME=minecraft@SERVER_ID.service
+SERVER_DIR=/srv/minecraft/SERVER_ID
+JAR_NAME=server.jar
+```
+
+Fabric, Forge, and other server types still need a trusted fixed URL or their
+own provider-specific resolver.
 
 ## Useful files
 
