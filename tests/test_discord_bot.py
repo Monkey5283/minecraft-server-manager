@@ -204,11 +204,105 @@ async def test_status_message_checks_every_configured_server() -> None:
 
     message = await bot._server_status_message()
 
-    assert bot.tree.get_command("status") is not None
+    command = bot.tree.get_command("status")
+    assert command is not None
+    assert command.default_permissions is None
     assert "**Velocity**" in message and "online" in message
     assert "**Lobby**" in message and "offline" in message
     assert "**Vanilla**" in message and "unreachable" in message
     assert agents.status.await_count == 3
+
+
+def test_status_runtime_permission_requires_discord_administrator() -> None:
+    interaction = Mock()
+    member = Mock(spec=discord.Member)
+    member.guild_permissions.administrator = False
+    interaction.user = member
+
+    assert MinecraftDiscordBot.is_administrator(interaction) is False
+
+    member.guild_permissions.administrator = True
+
+    assert MinecraftDiscordBot.is_administrator(interaction) is True
+
+
+async def test_players_message_is_public_and_shows_current_servers() -> None:
+    servers = (
+        RemoteServer(
+            id="lobby",
+            name="Lobby",
+            agent_url="http://192.168.1.35:8766",
+            token="two",
+            track_players=True,
+        ),
+        RemoteServer(
+            id="survival",
+            name="Vanilla",
+            agent_url="http://192.168.1.16:8766",
+            token="one",
+            track_players=True,
+        ),
+        RemoteServer(
+            id="velocity",
+            name="Velocity",
+            agent_url="http://192.168.1.35:8766",
+            token="two",
+            track_players=False,
+        ),
+    )
+    config = replace(make_health_config(), servers=servers)
+    agents = Mock()
+    agents.players = AsyncMock(
+        side_effect=[
+            ("Monkey5283", "Builder"),
+            ("Explorer",),
+        ]
+    )
+    bot = MinecraftDiscordBot(config, agents)
+
+    message = await bot._players_message()
+
+    command = bot.tree.get_command("players")
+    assert command is not None
+    assert command.default_permissions is None
+    assert "**Monkey5283** — Lobby" in message
+    assert "**Builder** — Lobby" in message
+    assert "**Explorer** — Vanilla" in message
+    assert "Velocity" not in message
+    assert agents.players.await_count == 2
+
+
+async def test_players_message_marks_unavailable_queries_without_hiding_players() -> None:
+    servers = (
+        RemoteServer(
+            id="lobby",
+            name="Lobby",
+            agent_url="http://192.168.1.35:8766",
+            token="two",
+            track_players=True,
+        ),
+        RemoteServer(
+            id="survival",
+            name="Vanilla",
+            agent_url="http://192.168.1.16:8766",
+            token="one",
+            track_players=True,
+        ),
+    )
+    config = replace(make_health_config(), servers=servers)
+    agents = Mock()
+    agents.players = AsyncMock(
+        side_effect=[
+            ("Monkey5283",),
+            AgentUnavailable("Vanilla agent is unreachable"),
+        ]
+    )
+    bot = MinecraftDiscordBot(config, agents)
+
+    message = await bot._players_message()
+
+    assert "**Monkey5283** — Lobby" in message
+    assert "Player data unavailable: Vanilla" in message
 
 
 async def test_player_session_uses_one_editable_message(monkeypatch):

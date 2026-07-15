@@ -79,6 +79,14 @@ class MinecraftDiscordBot(discord.Client):
             )
         return False
 
+    @staticmethod
+    def is_administrator(interaction: discord.Interaction) -> bool:
+        user = interaction.user
+        return (
+            isinstance(user, discord.Member)
+            and user.guild_permissions.administrator
+        )
+
     async def server_autocomplete(
         self, _interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[str]]:
@@ -175,15 +183,26 @@ class MinecraftDiscordBot(discord.Client):
             description="Show the status of every Minecraft server",
         )
         async def status(interaction: discord.Interaction) -> None:
-            if not self.is_allowed(interaction):
+            if not self.is_administrator(interaction):
                 await interaction.response.send_message(
-                    "You are not allowed to view server status.",
+                    "Only Discord administrators can use `/status`.",
                     ephemeral=True,
                 )
                 return
             await interaction.response.defer(ephemeral=True, thinking=True)
             await interaction.followup.send(
                 await self._server_status_message(),
+                ephemeral=True,
+            )
+
+        @self.tree.command(
+            name="players",
+            description="Show active Minecraft players and their server",
+        )
+        async def players(interaction: discord.Interaction) -> None:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            await interaction.followup.send(
+                await self._players_message(),
                 ephemeral=True,
             )
 
@@ -697,6 +716,59 @@ class MinecraftDiscordBot(discord.Client):
             *(self._startup_status_line(server) for server in self.config.servers)
         )
         message = "**Minecraft server status**\n" + "\n".join(lines)
+        if len(message) > 1900:
+            message = message[:1897] + "..."
+        return message
+
+    async def _players_message(self) -> str:
+        tracked_servers = tuple(
+            server for server in self.config.servers if server.track_players
+        )
+        if not tracked_servers:
+            return (
+                "**Active Minecraft players**\n"
+                "Player Query is not configured for any server."
+            )
+
+        snapshots = await asyncio.gather(
+            *(self.agents.players(server) for server in tracked_servers),
+            return_exceptions=True,
+        )
+        players: dict[str, tuple[str, list[str]]] = {}
+        unavailable: list[str] = []
+        for server, snapshot in zip(tracked_servers, snapshots, strict=True):
+            if isinstance(snapshot, BaseException):
+                unavailable.append(server.name)
+                continue
+            for raw_name in snapshot:
+                player_name = raw_name.strip()
+                if not player_name or len(player_name) > 64:
+                    continue
+                normalized = player_name.casefold()
+                if normalized not in players:
+                    players[normalized] = (player_name, [])
+                locations = players[normalized][1]
+                if server.name not in locations:
+                    locations.append(server.name)
+
+        lines = ["**Active Minecraft players**"]
+        if players:
+            for normalized in sorted(players):
+                player_name, locations = players[normalized]
+                player = discord.utils.escape_markdown(player_name)
+                location = " / ".join(
+                    discord.utils.escape_markdown(name) for name in locations
+                )
+                lines.append(f"• **{player}** — {location}")
+        else:
+            lines.append("No players are currently online.")
+        if unavailable:
+            server_names = ", ".join(
+                discord.utils.escape_markdown(name) for name in unavailable
+            )
+            lines.append(f"⚠️ Player data unavailable: {server_names}")
+
+        message = "\n".join(lines)
         if len(message) > 1900:
             message = message[:1897] + "..."
         return message

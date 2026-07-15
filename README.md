@@ -139,9 +139,10 @@ still on battery after the delay, the controller will:
 4. run the local Pi shutdown command.
 
 Discord also gets an `/ups` slash command that shows line/battery status and
-current battery charge. Use `/status` to check every configured Minecraft
-server in one response; it shows each server as online, offline, busy,
-unreachable, or unknown.
+current battery charge. `/status` checks every configured Minecraft server in
+one response; it is visible to everyone but only Discord administrators can
+run it. `/players` is visible and usable by everyone and lists each active
+player with their current Paper server.
 
 ### Live Discord health status
 
