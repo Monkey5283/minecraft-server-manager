@@ -189,10 +189,10 @@ class MinecraftDiscordBot(discord.Client):
                     ephemeral=True,
                 )
                 return
-            await interaction.response.defer(ephemeral=True, thinking=True)
+            await interaction.response.defer(thinking=True)
             await interaction.followup.send(
                 await self._server_status_message(),
-                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
 
         @self.tree.command(
@@ -200,10 +200,10 @@ class MinecraftDiscordBot(discord.Client):
             description="Show active Minecraft players and their server",
         )
         async def players(interaction: discord.Interaction) -> None:
-            await interaction.response.defer(ephemeral=True, thinking=True)
+            await interaction.response.defer(thinking=True)
             await interaction.followup.send(
                 await self._players_message(),
-                ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
 
         @self.tree.command(

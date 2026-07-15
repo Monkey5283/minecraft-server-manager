@@ -226,6 +226,47 @@ def test_status_runtime_permission_requires_discord_administrator() -> None:
     assert MinecraftDiscordBot.is_administrator(interaction) is True
 
 
+async def test_status_success_is_posted_to_the_channel(monkeypatch) -> None:
+    bot = MinecraftDiscordBot(make_health_config(), Mock())
+    command = bot.tree.get_command("status")
+    assert command is not None
+    interaction = Mock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    monkeypatch.setattr(bot, "is_administrator", lambda _interaction: True)
+    monkeypatch.setattr(
+        bot,
+        "_server_status_message",
+        AsyncMock(return_value="server status"),
+    )
+
+    await command.callback(interaction)
+
+    interaction.response.defer.assert_awaited_once_with(thinking=True)
+    interaction.followup.send.assert_awaited_once()
+    assert "ephemeral" not in interaction.followup.send.await_args.kwargs
+
+
+async def test_players_success_is_posted_to_the_channel(monkeypatch) -> None:
+    bot = MinecraftDiscordBot(make_health_config(), Mock())
+    command = bot.tree.get_command("players")
+    assert command is not None
+    interaction = Mock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    monkeypatch.setattr(
+        bot,
+        "_players_message",
+        AsyncMock(return_value="player list"),
+    )
+
+    await command.callback(interaction)
+
+    interaction.response.defer.assert_awaited_once_with(thinking=True)
+    interaction.followup.send.assert_awaited_once()
+    assert "ephemeral" not in interaction.followup.send.await_args.kwargs
+
+
 async def test_players_message_is_public_and_shows_current_servers() -> None:
     servers = (
         RemoteServer(
