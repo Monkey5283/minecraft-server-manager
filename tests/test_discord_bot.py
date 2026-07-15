@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -167,6 +168,47 @@ async def test_startup_announcement_includes_server_statuses(monkeypatch):
     assert "**Survival** — online" in status_message
     assert "**Creative** — unreachable" in status_message
     assert agents.status.await_count == 2
+
+
+async def test_status_message_checks_every_configured_server() -> None:
+    servers = (
+        RemoteServer(
+            id="velocity",
+            name="Velocity",
+            agent_url="http://192.168.1.35:8766",
+            token="two",
+        ),
+        RemoteServer(
+            id="lobby",
+            name="Lobby",
+            agent_url="http://192.168.1.35:8766",
+            token="two",
+        ),
+        RemoteServer(
+            id="survival",
+            name="Vanilla",
+            agent_url="http://192.168.1.16:8766",
+            token="one",
+        ),
+    )
+    config = replace(make_health_config(), servers=servers)
+    agents = Mock()
+    agents.status = AsyncMock(
+        side_effect=[
+            {"state": "online"},
+            {"state": "offline"},
+            AgentUnavailable("Vanilla agent is unreachable"),
+        ]
+    )
+    bot = MinecraftDiscordBot(config, agents)
+
+    message = await bot._server_status_message()
+
+    assert bot.tree.get_command("status") is not None
+    assert "**Velocity**" in message and "online" in message
+    assert "**Lobby**" in message and "offline" in message
+    assert "**Vanilla**" in message and "unreachable" in message
+    assert agents.status.await_count == 3
 
 
 async def test_player_session_uses_one_editable_message(monkeypatch):

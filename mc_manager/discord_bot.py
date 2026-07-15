@@ -171,6 +171,23 @@ class MinecraftDiscordBot(discord.Client):
                 await interaction.followup.send(str(exc), ephemeral=True)
 
         @self.tree.command(
+            name="status",
+            description="Show the status of every Minecraft server",
+        )
+        async def status(interaction: discord.Interaction) -> None:
+            if not self.is_allowed(interaction):
+                await interaction.response.send_message(
+                    "You are not allowed to view server status.",
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            await interaction.followup.send(
+                await self._server_status_message(),
+                ephemeral=True,
+            )
+
+        @self.tree.command(
             name="ups",
             description="Show the controller battery backup status",
         )
@@ -660,20 +677,29 @@ class MinecraftDiscordBot(discord.Client):
     ) -> None:
         if not self.config.servers:
             return
+        message = await self._server_status_message()
+        try:
+            await channel.send(
+                message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            LOG.info(
+                "Startup status announced for %s server(s)",
+                len(self.config.servers),
+            )
+        except discord.DiscordException:
+            LOG.exception("Could not send the startup server status announcement")
+
+    async def _server_status_message(self) -> str:
+        if not self.config.servers:
+            return "**Minecraft server status**\nNo servers are configured."
         lines = await asyncio.gather(
             *(self._startup_status_line(server) for server in self.config.servers)
         )
         message = "**Minecraft server status**\n" + "\n".join(lines)
         if len(message) > 1900:
             message = message[:1897] + "..."
-        try:
-            await channel.send(
-                message,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            LOG.info("Startup status announced for %s server(s)", len(lines))
-        except discord.DiscordException:
-            LOG.exception("Could not send the startup server status announcement")
+        return message
 
     async def _startup_status_line(self, server: RemoteServer) -> str:
         try:

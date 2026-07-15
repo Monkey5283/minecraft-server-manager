@@ -139,7 +139,9 @@ still on battery after the delay, the controller will:
 4. run the local Pi shutdown command.
 
 Discord also gets an `/ups` slash command that shows line/battery status and
-current battery charge.
+current battery charge. Use `/status` to check every configured Minecraft
+server in one response; it shows each server as online, offline, busy,
+unreachable, or unknown.
 
 ### Live Discord health status
 
@@ -448,10 +450,12 @@ Active session message IDs are saved in
 after a service restart or `sudo update-minecraft-manager`, so an update can
 continue editing the same Discord messages rather than starting duplicates.
 
-### Bedrock cross-play and clickable server navigation
+### Bedrock cross-play and inventory-free server portals
 
 The managed network-plugin setup installs Geyser and Floodgate on Velocity,
-ViaVersion on both Paper backends, and a compass-based Lobby server selector.
+ViaVersion on both Paper backends, and the private MonkeyPortals plugin. Admins
+mark portal regions with commands; players transfer by walking through them and
+receive no selector item.
 See [docs/network-plugins.md](docs/network-plugins.md) for the exact install,
 sudo, agent, firewall, and verification steps.
 
