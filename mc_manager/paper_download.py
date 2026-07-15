@@ -20,6 +20,7 @@ VERSION_PATTERN = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$")
 BUILD_PATTERN = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 JAR_NAME_PATTERN = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*\.jar$")
+ALLOWED_CHANNELS = frozenset({"STABLE", "BETA"})
 
 
 class PaperDownloadError(RuntimeError):
@@ -30,6 +31,7 @@ class PaperDownloadError(RuntimeError):
 class PaperDownload:
     version: str
     build: str
+    channel: str
     name: str
     url: str
     sha256: str
@@ -44,7 +46,7 @@ def _require_safe_line(value: object, label: str) -> str:
     return text
 
 
-def parse_latest_stable_build(payload: Any, version: str) -> PaperDownload:
+def parse_latest_supported_build(payload: Any, version: str) -> PaperDownload:
     if not VERSION_PATTERN.fullmatch(version):
         raise PaperDownloadError("Paper version has an invalid format")
     if isinstance(payload, dict) and payload.get("ok") is False:
@@ -57,18 +59,24 @@ def parse_latest_stable_build(payload: Any, version: str) -> PaperDownload:
         (
             item
             for item in payload
-            if isinstance(item, dict) and item.get("channel") == "STABLE"
+            if (
+                isinstance(item, dict)
+                and item.get("channel") in ALLOWED_CHANNELS
+            )
         ),
         None,
     )
     if build_data is None:
         raise PaperDownloadError(
-            f"No stable Paper build is available for Minecraft {version}"
+            f"No stable or beta Paper build is available for Minecraft {version}"
         )
 
     build = _require_safe_line(build_data.get("id"), "build ID")
+    channel = _require_safe_line(build_data.get("channel"), "release channel")
     if not BUILD_PATTERN.fullmatch(build):
         raise PaperDownloadError("Paper API returned an invalid build ID")
+    if channel not in ALLOWED_CHANNELS:
+        raise PaperDownloadError("Paper API returned an unsupported release channel")
     downloads = build_data.get("downloads")
     if not isinstance(downloads, dict):
         raise PaperDownloadError("Paper build does not contain downloads")
@@ -95,13 +103,14 @@ def parse_latest_stable_build(payload: Any, version: str) -> PaperDownload:
     return PaperDownload(
         version=version,
         build=build,
+        channel=channel,
         name=name,
         url=url,
         sha256=sha256.lower(),
     )
 
 
-def fetch_latest_stable_build(
+def fetch_latest_supported_build(
     version: str,
     *,
     opener: Callable[..., Any] = urlopen,
@@ -128,12 +137,15 @@ def fetch_latest_stable_build(
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PaperDownloadError("Paper API returned invalid JSON") from exc
-    return parse_latest_stable_build(payload, version)
+    return parse_latest_supported_build(payload, version)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Resolve the latest stable Paper build for one Minecraft version"
+        description=(
+            "Resolve the latest stable or beta Paper build for one "
+            "Minecraft version"
+        )
     )
     parser.add_argument("--version", required=True, help="Minecraft version")
     return parser.parse_args()
@@ -142,12 +154,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     try:
-        download = fetch_latest_stable_build(args.version)
+        download = fetch_latest_supported_build(args.version)
     except PaperDownloadError as exc:
         raise SystemExit(f"Could not resolve Paper update: {exc}") from exc
-    # The shell updater reads these as four lines. Every field is validated to
+    # The shell updater reads these as five lines. Every field is validated to
     # exclude line breaks before it reaches this interface.
     print(download.build)
+    print(download.channel)
     print(download.url)
     print(download.sha256)
     print(download.name)

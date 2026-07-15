@@ -568,9 +568,10 @@ token, secret, Discord intent, or manual configuration migration is required.
 
 ## 7. Configure Minecraft jar updates
 
-The included updater can discover the newest **stable** Paper build when you
-choose **Apply update** in Discord. It only updates the Minecraft version you
-explicitly configure; it will not jump from one Minecraft version to another.
+The included updater can discover the newest **stable or beta** Paper build
+when you choose **Apply update** in Discord. **Alpha builds are never
+installed.** It only updates the Minecraft version you explicitly configure;
+it will not jump from one Minecraft version to another.
 
 First, update the program on the Pi controller and each Ubuntu agent:
 
@@ -584,7 +585,7 @@ On `192.168.1.35`, replace `/etc/minecraft/lobby-update.env` with:
 
 ```ini
 UPDATE_PROVIDER=paper
-PAPER_VERSION=26.1.2
+PAPER_VERSION=26.2
 SERVICE_NAME=minecraft@lobby.service
 SERVER_DIR=/srv/minecraft/lobby
 JAR_NAME=server.jar
@@ -598,10 +599,9 @@ sudo chmod 600 /etc/minecraft/lobby-update.env
 sudo /usr/local/sbin/update-minecraft-jar lobby
 ```
 
-The last command is a safe direct test. If build 74 is still the newest stable
-build, it reports that Lobby is already current and does not restart it. If a
-newer stable build exists, it downloads and verifies that jar, replaces
-`server.jar`, and restarts `minecraft@lobby.service`.
+The last command is a safe direct test. It installs the newest stable or beta
+build for `26.2`; it skips the restart when that exact build is already
+installed. It never selects an alpha build.
 
 ### Vanilla Paper server
 
@@ -617,7 +617,7 @@ If it shows `/srv/minecraft/survival` and `-jar server.jar`, use
 
 ```ini
 UPDATE_PROVIDER=paper
-PAPER_VERSION=26.1.2
+PAPER_VERSION=26.2
 SERVICE_NAME=papermc.service
 SERVER_DIR=/srv/minecraft/survival
 JAR_NAME=server.jar
@@ -636,15 +636,16 @@ The server ID in the env filename and command must match the ID in the agent's
 `agent.toml`.
 
 After the direct test, use Discord's **Apply update** action normally. Its reply
-shows whether it installed a particular Paper stable build or skipped the
-restart because that build was already installed.
+shows whether it installed a particular Paper stable or beta build or skipped
+the restart because that build was already installed.
 
 The updater uses PaperMC's official downloads service with an identifying
 User-Agent, verifies the published SHA-256 checksum and jar structure before it
 stops Minecraft, saves the old jar as `server.jar.pre-update`, and rolls back if
-the service does not remain active. Paper recommends making a backup and being
-present for an update in case a plugin is incompatible. Run the manager's
-**backup** script first, especially when changing `PAPER_VERSION`.
+the service does not remain active. Jar rollback does not undo world-format
+changes. Paper recommends making a backup and being present for an update in
+case a plugin is incompatible. Make a full backup first whenever changing
+`PAPER_VERSION`, and especially before installing a beta.
 
 Official references: [PaperMC downloads service](https://docs.papermc.io/misc/downloads-service/)
 and [updating Paper](https://docs.papermc.io/paper/updating/).

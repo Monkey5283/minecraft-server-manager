@@ -63,7 +63,7 @@ def test_successful_update_message_includes_agent_result() -> None:
             "state": "succeeded",
             "operation": "update",
             "output": (
-                "lobby is already running Paper 26.1.2 stable build 81; "
+                "lobby is already running Paper 26.2 BETA build 60; "
                 "no restart needed"
             ),
         },
@@ -71,7 +71,7 @@ def test_successful_update_message_includes_agent_result() -> None:
     )
 
     assert "`update` completed" in message
-    assert "already running Paper 26.1.2 stable build 81" in message
+    assert "already running Paper 26.2 BETA build 60" in message
 
 
 def test_non_update_success_message_does_not_include_command_output() -> None:

@@ -9,8 +9,8 @@ import pytest
 from mc_manager.paper_download import (
     PaperDownloadError,
     USER_AGENT,
-    fetch_latest_stable_build,
-    parse_latest_stable_build,
+    fetch_latest_supported_build,
+    parse_latest_supported_build,
 )
 
 
@@ -37,17 +37,18 @@ def build_payload(
     }
 
 
-def test_parse_uses_first_stable_paper_build() -> None:
+def test_parse_uses_first_stable_or_beta_paper_build() -> None:
     payload = [
         build_payload(channel="ALPHA"),
-        build_payload(),
-        {**build_payload(), "id": 80},
+        build_payload(channel="BETA"),
+        {**build_payload(channel="STABLE"), "id": 80},
     ]
 
-    download = parse_latest_stable_build(payload, "26.1.2")
+    download = parse_latest_supported_build(payload, "26.1.2")
 
     assert download.version == "26.1.2"
     assert download.build == "81"
+    assert download.channel == "BETA"
     assert download.name == "paper-26.1.2-81.jar"
     assert download.sha256 == "a" * 64
 
@@ -73,15 +74,15 @@ def test_parse_rejects_untrusted_metadata(
     match: str,
 ) -> None:
     with pytest.raises(PaperDownloadError, match=match):
-        parse_latest_stable_build(
+        parse_latest_supported_build(
             [build_payload(url=url, sha256=checksum)],
             "26.1.2",
         )
 
 
-def test_parse_rejects_missing_stable_build() -> None:
-    with pytest.raises(PaperDownloadError, match="No stable Paper build"):
-        parse_latest_stable_build(
+def test_parse_rejects_alpha_only_builds() -> None:
+    with pytest.raises(PaperDownloadError, match="No stable or beta Paper build"):
+        parse_latest_supported_build(
             [build_payload(channel="ALPHA")],
             "26.1.2",
         )
@@ -94,7 +95,7 @@ def test_fetch_uses_official_endpoint_and_identifying_user_agent() -> None:
     response.read.return_value = json.dumps([build_payload()]).encode()
     opener = Mock(return_value=response)
 
-    download = fetch_latest_stable_build("26.1.2", opener=opener)
+    download = fetch_latest_supported_build("26.1.2", opener=opener)
 
     request = opener.call_args.args[0]
     assert request.full_url.endswith(
@@ -109,4 +110,4 @@ def test_fetch_wraps_network_errors() -> None:
     opener = Mock(side_effect=URLError("network down"))
 
     with pytest.raises(PaperDownloadError, match="Could not contact"):
-        fetch_latest_stable_build("26.1.2", opener=opener)
+        fetch_latest_supported_build("26.1.2", opener=opener)

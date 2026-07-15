@@ -52,6 +52,7 @@ def test_plugin_updater_uses_profiles_checksums_and_transactional_rollback():
     assert 'add_geyser_download "floodgate-velocity.jar" "floodgate"' in updater
     assert 'add_modrinth_download "ServerSelector.jar"' in updater
     assert 'add_modrinth_download "ViaVersion.jar"' in updater
+    assert 'add_modrinth_download "ViaBackwards.jar"' in updater
     assert "sha512sum --check" in updater
     assert "sha256sum --check" in updater
     assert "jar --list --file" in updater
@@ -65,6 +66,8 @@ def test_jar_updater_supports_safe_on_demand_paper_updates():
     assert 'UPDATE_PROVIDER:-static' in updater
     assert "mc-manager-resolve-paper" in updater
     assert 'PAPER_VERSION:?PAPER_VERSION is required' in updater
+    assert 'paper_channel" != "STABLE"' in updater
+    assert 'paper_channel" != "BETA"' in updater
     assert "sha256sum --check" in updater
     assert "jar --list --file" in updater
     assert "already running" in updater
@@ -77,6 +80,6 @@ def test_server_selector_template_targets_the_velocity_server_ids():
     config = (ROOT / "deploy/plugin-config/server-selector.yml").read_text()
 
     assert 'command: "server:lobby"' in config
-    assert 'command: "server:survival"' in config
+    assert 'command: "server:vanilla"' in config
     assert "give-on-every-join: true" in config
     assert "lock-selector-item: true" in config

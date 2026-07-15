@@ -23,7 +23,8 @@ fi
 
 # The settings file is root-managed. Static mode remains backward compatible
 # with existing DOWNLOAD_URL/SHA256 files. Paper mode resolves the latest
-# stable build for one explicitly configured Minecraft version.
+# stable or beta build for one explicitly configured Minecraft version. Alpha
+# builds are never eligible.
 # shellcheck disable=SC1090
 source "$settings"
 
@@ -86,15 +87,20 @@ case "$update_provider" in
       exit 1
     fi
     mapfile -t paper_fields <<< "$metadata"
-    if [[ ${#paper_fields[@]} -ne 4 ]]; then
+    if [[ ${#paper_fields[@]} -ne 5 ]]; then
       echo "Paper resolver returned invalid metadata" >&2
       exit 1
     fi
     paper_build="${paper_fields[0]}"
-    download_url="${paper_fields[1]}"
-    expected_sha256="${paper_fields[2]}"
-    download_name="${paper_fields[3]}"
-    target_description="Paper ${PAPER_VERSION} stable build ${paper_build}"
+    paper_channel="${paper_fields[1]}"
+    download_url="${paper_fields[2]}"
+    expected_sha256="${paper_fields[3]}"
+    download_name="${paper_fields[4]}"
+    if [[ "$paper_channel" != "STABLE" && "$paper_channel" != "BETA" ]]; then
+      echo "Paper resolver returned a disallowed release channel" >&2
+      exit 1
+    fi
+    target_description="Paper ${PAPER_VERSION} ${paper_channel} build ${paper_build}"
     ;;
   *)
     echo "UPDATE_PROVIDER must be 'static' or 'paper'" >&2
