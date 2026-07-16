@@ -43,6 +43,7 @@ async def test_agent_requires_token_and_runs_only_configured_action(tmp_path: Pa
         status = await client.get("/v1/servers", headers=headers)
         assert status.status_code == 200
         assert status.json()[0]["state"] == "online"
+        assert status.json()[0]["player_tracking_available"] is False
 
         forbidden = await client.post(
             "/v1/servers/survival/actions/destroy", headers=headers

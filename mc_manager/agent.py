@@ -197,6 +197,7 @@ def create_agent_app(config: AgentConfig) -> FastAPI:
                     "actions": sorted(server.actions.keys() - {"status"}),
                     "scripts": sorted(server.scripts.keys()),
                     "files_enabled": server.file_manager is not None,
+                    "player_tracking_available": server.player_query is not None,
                 }
             )
         return results

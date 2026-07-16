@@ -270,6 +270,34 @@ If UFW is enabled, allow agent connections only from the Pi:
 sudo ufw allow from PI_LAN_IP to any port 8766 proto tcp
 ```
 
+### Add more servers from the dashboard
+
+After a server is defined in an agent's
+`/etc/minecraft-manager/agent.toml`, it can be registered on the controller
+without editing `controller.toml` or restarting the Pi service:
+
+1. Add another `[[servers]]` block on the Ubuntu host. Give it a unique
+   lowercase `id`, its working directory, and its allowed actions.
+2. Add the optional `[servers.file_manager]` and `[servers.player_query]`
+   blocks when those features are needed.
+3. Run `sudo systemctl restart mc-manager-agent` on that host.
+4. Open **Server setup** in the dashboard, choose **Scan agents**, and select
+   **Add to dashboard**.
+
+The controller verifies the server directly with its already trusted agent and
+reuses that agent connection internally. Agent tokens and SSH credentials are
+never sent to the browser. Dashboard registrations are saved in
+`/var/lib/minecraft-manager/managed-servers.json`, which is preserved by normal
+manager updates. Display names and player-tracking choices can be changed from
+the same screen. Removing a registration only removes it from this dashboard;
+it does not delete files, stop the server, or change `agent.toml`.
+
+The first server on a completely new machine still needs one corresponding
+entry in the Pi's `controller.toml` so the controller has that machine's agent
+URL and token environment variable. After that one-time trusted connection is
+configured, additional servers on that same machine use the dashboard flow
+above.
+
 ### Dashboard file manager
 
 The web dashboard can browse a server directory, edit UTF-8 text files, create

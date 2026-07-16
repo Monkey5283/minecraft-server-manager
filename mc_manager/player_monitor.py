@@ -82,6 +82,9 @@ class PlayerPresenceMonitor:
         self._failed_servers: set[str] = set()
         self._load_state()
 
+    def set_servers(self, servers: tuple[RemoteServer, ...]) -> None:
+        self.servers = tuple(server for server in servers if server.track_players)
+
     async def run(self) -> None:
         while True:
             try:
@@ -93,14 +96,15 @@ class PlayerPresenceMonitor:
             await self.sleep(self.tracking.poll_interval_seconds)
 
     async def poll_once(self) -> None:
+        servers = self.servers
         snapshots = await asyncio.gather(
-            *(self.agents.players(server) for server in self.servers),
+            *(self.agents.players(server) for server in servers),
             return_exceptions=True,
         )
         all_healthy = True
         observed: dict[str, list[tuple[str, RemoteServer]]] = {}
 
-        for server, snapshot in zip(self.servers, snapshots, strict=True):
+        for server, snapshot in zip(servers, snapshots, strict=True):
             if isinstance(snapshot, BaseException):
                 all_healthy = False
                 if server.id not in self._failed_servers:

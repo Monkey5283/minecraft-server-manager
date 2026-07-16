@@ -6,8 +6,15 @@ const serversNode = document.querySelector("#servers");
 const template = document.querySelector("#server-template");
 const refreshButton = document.querySelector("#refresh");
 const logoutButton = document.querySelector("#logout");
+const manageServersButton = document.querySelector("#manage-servers");
 const lastUpdated = document.querySelector("#last-updated");
 const notice = document.querySelector("#notice");
+const serverRegistry = document.querySelector("#server-registry");
+const closeServerRegistryButton = document.querySelector("#close-server-registry");
+const discoverServersButton = document.querySelector("#discover-servers");
+const registryNotice = document.querySelector("#registry-notice");
+const configuredServers = document.querySelector("#configured-servers");
+const discoveredServers = document.querySelector("#discovered-servers");
 const fileManager = document.querySelector("#file-manager");
 const fileServerName = document.querySelector("#file-server-name");
 const fileNotice = document.querySelector("#file-notice");
@@ -60,6 +67,8 @@ function showLogin() {
   loginPanel.hidden = false;
   dashboard.hidden = true;
   fileManager.hidden = true;
+  serverRegistry.hidden = true;
+  manageServersButton.hidden = true;
   refreshButton.hidden = true;
   logoutButton.hidden = true;
 }
@@ -68,6 +77,7 @@ function showDashboard() {
   loginPanel.hidden = true;
   dashboard.hidden = false;
   fileManager.hidden = true;
+  manageServersButton.hidden = false;
   refreshButton.hidden = false;
   logoutButton.hidden = false;
 }
@@ -84,6 +94,13 @@ function showFileNotice(message, kind = "info") {
   fileNotice.className = `notice ${kind}`;
   fileNotice.hidden = false;
   window.setTimeout(() => (fileNotice.hidden = true), 7000);
+}
+
+function showRegistryNotice(message, kind = "info") {
+  registryNotice.textContent = message;
+  registryNotice.className = `notice ${kind}`;
+  registryNotice.hidden = false;
+  window.setTimeout(() => (registryNotice.hidden = true), 7000);
 }
 
 async function loadServers() {
@@ -141,6 +158,197 @@ function renderServer(server) {
     actions.append(filesButton);
   }
   return card;
+}
+
+function registryItemHeading(server, badgeText) {
+  const heading = document.createElement("div");
+  heading.className = "registry-item-heading";
+  const identity = document.createElement("div");
+  const serverId = document.createElement("p");
+  serverId.className = "server-id";
+  serverId.textContent = server.id;
+  const name = document.createElement("h4");
+  name.textContent = server.name;
+  identity.append(serverId, name);
+  const badge = document.createElement("span");
+  badge.className = "state";
+  badge.textContent = badgeText;
+  heading.append(identity, badge);
+  return heading;
+}
+
+function trackingControl(checked, available = true) {
+  const label = document.createElement("label");
+  label.className = "registry-checkbox";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = checked;
+  checkbox.disabled = !available;
+  const text = document.createElement("span");
+  text.textContent = available
+    ? "Track players for Discord status"
+    : "Player tracking is not configured on this agent";
+  label.append(checkbox, text);
+  return { label, checkbox };
+}
+
+function renderConfiguredServer(server) {
+  const item = document.createElement("article");
+  item.className = "registry-item";
+  item.append(registryItemHeading(server, server.managed ? "dashboard" : "config file"));
+
+  if (!server.managed) {
+    const detail = document.createElement("p");
+    detail.className = "registry-item-detail";
+    detail.textContent = "Protected base server. Edit controller.toml to change it.";
+    item.append(detail);
+    return item;
+  }
+
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "Display name";
+  const nameInput = document.createElement("input");
+  nameInput.value = server.name;
+  nameInput.maxLength = 80;
+  nameInput.required = true;
+  nameLabel.append(nameInput);
+  const tracking = trackingControl(server.track_players);
+  const actions = document.createElement("div");
+  actions.className = "registry-item-actions";
+  const save = document.createElement("button");
+  save.textContent = "Save";
+  const remove = document.createElement("button");
+  remove.textContent = "Remove";
+  remove.className = "warning";
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    try {
+      await api(`/api/server-registry/${encodeURIComponent(server.id)}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: nameInput.value,
+          track_players: tracking.checkbox.checked,
+        }),
+      });
+      showRegistryNotice(`Saved ${server.id}.`, "success");
+      await Promise.all([loadServers(), loadServerRegistry(false)]);
+    } catch (error) {
+      showRegistryNotice(error.message, "error");
+    } finally {
+      save.disabled = false;
+    }
+  });
+  remove.addEventListener("click", async () => {
+    const confirmation = window.prompt(
+      `Remove ${server.name} from this dashboard? Type ${server.id} to confirm.`
+    );
+    if (confirmation === null) return;
+    remove.disabled = true;
+    try {
+      await api(`/api/server-registry/${encodeURIComponent(server.id)}/remove`, {
+        method: "POST",
+        body: JSON.stringify({ confirm_id: confirmation }),
+      });
+      showRegistryNotice(`Removed ${server.id} from the dashboard.`, "success");
+      await Promise.all([loadServers(), loadServerRegistry(true)]);
+    } catch (error) {
+      showRegistryNotice(error.message, "error");
+    } finally {
+      remove.disabled = false;
+    }
+  });
+  actions.append(save, remove);
+  item.append(nameLabel, tracking.label, actions);
+  return item;
+}
+
+function renderDiscoveredServer(server) {
+  const item = document.createElement("article");
+  item.className = "registry-item";
+  item.append(registryItemHeading(server, server.state));
+  const detail = document.createElement("p");
+  detail.className = "registry-item-detail";
+  detail.textContent = `${server.files_enabled ? "File manager ready" : "File manager unavailable"} · via ${server.source_name}`;
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "Dashboard name";
+  const nameInput = document.createElement("input");
+  nameInput.value = server.name;
+  nameInput.maxLength = 80;
+  nameInput.required = true;
+  nameLabel.append(nameInput);
+  const tracking = trackingControl(false, server.player_tracking_available);
+  const add = document.createElement("button");
+  add.textContent = "Add to dashboard";
+  add.addEventListener("click", async () => {
+    add.disabled = true;
+    try {
+      await api("/api/server-registry", {
+        method: "POST",
+        body: JSON.stringify({
+          server_id: server.id,
+          source_server_id: server.source_server_id,
+          name: nameInput.value,
+          track_players: tracking.checkbox.checked,
+        }),
+      });
+      showRegistryNotice(`Added ${server.id} to the dashboard.`, "success");
+      await Promise.all([loadServers(), loadServerRegistry(true)]);
+    } catch (error) {
+      showRegistryNotice(error.message, "error");
+    } finally {
+      add.disabled = false;
+    }
+  });
+  item.append(detail, nameLabel, tracking.label, add);
+  return item;
+}
+
+function emptyRegistryMessage(message) {
+  const paragraph = document.createElement("p");
+  paragraph.className = "empty-state registry-empty";
+  paragraph.textContent = message;
+  return paragraph;
+}
+
+async function loadServerRegistry(scanAgents = true) {
+  discoverServersButton.disabled = true;
+  serverRegistry.setAttribute("aria-busy", "true");
+  try {
+    const registryRequest = api("/api/server-registry");
+    const discoveryRequest = scanAgents
+      ? api("/api/server-registry/discover")
+      : Promise.resolve(null);
+    const [registry, discovery] = await Promise.all([registryRequest, discoveryRequest]);
+    configuredServers.replaceChildren(
+      ...registry.configured.map(renderConfiguredServer)
+    );
+    if (discovery) {
+      const candidates = discovery.candidates.map(renderDiscoveredServer);
+      if (!candidates.length) {
+        candidates.push(
+          emptyRegistryMessage("No unregistered servers were found on the trusted agents.")
+        );
+      }
+      discoveredServers.replaceChildren(...candidates);
+      if (discovery.unavailable.length) {
+        showRegistryNotice(
+          `${discovery.unavailable.length} agent connection could not be scanned.`,
+          "error"
+        );
+      }
+    }
+  } catch (error) {
+    showRegistryNotice(error.message, "error");
+  } finally {
+    serverRegistry.removeAttribute("aria-busy");
+    discoverServersButton.disabled = false;
+  }
+}
+
+async function openServerRegistry() {
+  serverRegistry.hidden = false;
+  serverRegistry.scrollIntoView({ behavior: "smooth", block: "start" });
+  await loadServerRegistry(true);
 }
 
 async function runAction(card, server, action, scriptName = "") {
@@ -236,6 +444,7 @@ async function openFileManager(server) {
   dashboard.hidden = true;
   loginPanel.hidden = true;
   fileManager.hidden = false;
+  manageServersButton.hidden = true;
   refreshButton.hidden = true;
   await loadDirectory("");
 }
@@ -501,6 +710,11 @@ loginForm.addEventListener("submit", async (event) => {
 });
 
 refreshButton.addEventListener("click", loadServers);
+manageServersButton.addEventListener("click", openServerRegistry);
+discoverServersButton.addEventListener("click", () => loadServerRegistry(true));
+closeServerRegistryButton.addEventListener("click", () => {
+  serverRegistry.hidden = true;
+});
 logoutButton.addEventListener("click", async () => {
   await api("/api/logout", { method: "POST" });
   showLogin();

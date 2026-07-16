@@ -49,6 +49,18 @@ def test_dashboard_assets_include_opt_in_file_manager_controls():
     assert "application/octet-stream" in javascript
 
 
+def test_dashboard_assets_include_managed_server_setup_controls():
+    static = ROOT / "mc_manager" / "static"
+    html = (static / "index.html").read_text()
+    javascript = (static / "app.js").read_text()
+
+    assert 'id="manage-servers"' in html
+    assert 'id="server-registry"' in html
+    assert "/api/server-registry/discover" in javascript
+    assert "source_server_id" in javascript
+    assert "confirm_id" in javascript
+
+
 def test_home_file_manager_override_is_narrow_and_opt_in():
     override = (
         ROOT / "deploy/systemd/mc-manager-agent-home-files.conf.example"

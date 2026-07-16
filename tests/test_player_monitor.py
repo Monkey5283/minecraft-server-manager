@@ -86,6 +86,27 @@ def make_messenger(*start_message_ids: int):
     return messenger
 
 
+def test_runtime_server_updates_refresh_player_tracking_targets(tmp_path: Path):
+    config = make_config(tmp_path / "player-sessions.json")
+    monitor = PlayerPresenceMonitor(
+        config,
+        make_agents({"lobby": (), "vanilla": ()}),
+        make_messenger(),
+        state_file=tmp_path / "player-sessions.json",
+    )
+    creative = RemoteServer(
+        id="creative",
+        name="Creative",
+        agent_url="http://192.168.1.35:8766",
+        token="host-two",
+        track_players=True,
+    )
+
+    monitor.set_servers((config.servers[0], creative))
+
+    assert [server.id for server in monitor.servers] == ["lobby", "creative"]
+
+
 async def test_join_sends_one_session_message(tmp_path: Path):
     state_file = tmp_path / "player-sessions.json"
     snapshots = {"lobby": ("Alice",), "vanilla": ()}
