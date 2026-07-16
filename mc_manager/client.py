@@ -6,7 +6,9 @@ from .config import RemoteServer
 
 
 class AgentUnavailable(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: int | None = None):
+        self.status_code = status_code
+        super().__init__(message)
 
 
 class AgentClient:
@@ -18,13 +20,23 @@ class AgentClient:
         return {"Authorization": f"Bearer {server.token}"}
 
     async def _request(
-        self, server: RemoteServer, method: str, path: str
+        self,
+        server: RemoteServer,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        json_body: dict | None = None,
+        content: bytes | None = None,
     ) -> dict | list:
         try:
             response = await self.client.request(
                 method,
                 f"{server.agent_url}{path}",
                 headers=self._headers(server),
+                params=params,
+                json=json_body,
+                content=content,
             )
             response.raise_for_status()
             return response.json()
@@ -34,7 +46,8 @@ class AgentClient:
             except ValueError:
                 detail = exc.response.text
             raise AgentUnavailable(
-                f"{server.name}: agent returned {exc.response.status_code}: {detail}"
+                f"{server.name}: agent returned {exc.response.status_code}: {detail}",
+                status_code=exc.response.status_code,
             ) from exc
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
             raise AgentUnavailable(f"{server.name}: agent is unreachable") from exc
@@ -74,6 +87,76 @@ class AgentClient:
                 f"{server.name}: agent returned an invalid player name"
             )
         return tuple(players)
+
+    async def files(self, server: RemoteServer, path: str = "") -> dict:
+        result = await self._request(
+            server,
+            "GET",
+            f"/v1/servers/{server.id}/files",
+            params={"path": path},
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("entries"), list):
+            raise AgentUnavailable(f"{server.name}: agent returned an invalid file list")
+        return result
+
+    async def file_content(self, server: RemoteServer, path: str) -> dict:
+        result = await self._request(
+            server,
+            "GET",
+            f"/v1/servers/{server.id}/files/content",
+            params={"path": path},
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("content"), str):
+            raise AgentUnavailable(f"{server.name}: agent returned invalid file content")
+        return result
+
+    async def save_file(
+        self,
+        server: RemoteServer,
+        path: str,
+        content: str,
+        expected_version: str | None,
+    ) -> dict:
+        result = await self._request(
+            server,
+            "PUT",
+            f"/v1/servers/{server.id}/files/content",
+            json_body={
+                "path": path,
+                "content": content,
+                "expected_version": expected_version,
+            },
+        )
+        assert isinstance(result, dict)
+        return result
+
+    async def create_directory(self, server: RemoteServer, path: str) -> dict:
+        result = await self._request(
+            server,
+            "POST",
+            f"/v1/servers/{server.id}/files/directory",
+            json_body={"path": path},
+        )
+        assert isinstance(result, dict)
+        return result
+
+    async def upload_file(
+        self,
+        server: RemoteServer,
+        path: str,
+        content: bytes,
+        *,
+        overwrite: bool,
+    ) -> dict:
+        result = await self._request(
+            server,
+            "PUT",
+            f"/v1/servers/{server.id}/files/upload",
+            params={"path": path, "overwrite": str(overwrite).lower()},
+            content=content,
+        )
+        assert isinstance(result, dict)
+        return result
 
     async def action(self, server: RemoteServer, action: str) -> dict:
         result = await self._request(

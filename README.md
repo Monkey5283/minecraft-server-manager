@@ -270,6 +270,65 @@ If UFW is enabled, allow agent connections only from the Pi:
 sudo ufw allow from PI_LAN_IP to any port 8766 proto tcp
 ```
 
+### Dashboard file manager
+
+The web dashboard can browse a server directory, edit UTF-8 text files, create
+files and folders, and upload or intentionally overwrite files. File access is
+disabled by default for existing configurations and must be enabled separately
+for each `[[servers]]` entry on its agent.
+
+Add this beneath the applicable server entry in
+`/etc/minecraft-manager/agent.toml`, before the next `[[servers]]` block:
+
+```toml
+[servers.file_manager]
+enabled = true
+root = "/srv/minecraft/survival"
+max_edit_size_bytes = 2097152
+max_upload_size_bytes = 33554432
+```
+
+Use the exact directory for that server. The agent resolves every requested
+path against this root and rejects absolute paths, `..` traversal, and symbolic
+links that leave it. The text editor accepts UTF-8 files up to 2 MiB by default;
+uploads are limited to 32 MiB. Increase the limits only when necessary.
+
+The `mcmanager` service account also needs filesystem permission. For the
+included `minecraft@.service`, which runs as `minecraft`, prepare a root under
+`/srv/minecraft` with:
+
+```bash
+sudo apt install -y acl
+server_root=/srv/minecraft/survival
+server_user=minecraft
+sudo setfacl -R -m "u:mcmanager:rwX,u:${server_user}:rwX" "$server_root"
+sudo find "$server_root" -type d -exec setfacl \
+  -m "d:u:mcmanager:rwx,d:u:${server_user}:rwx" {} +
+sudo systemctl restart mc-manager-agent
+```
+
+The default agent systemd sandbox already permits writes under
+`/srv/minecraft`. If a server lives under `/home`, create a narrow override so
+only its exact directory is exposed to the agent:
+
+```bash
+sudo install -d /etc/systemd/system/mc-manager-agent.service.d
+sudo cp ~/minecraft-server-manager/deploy/systemd/mc-manager-agent-home-files.conf.example \
+  /etc/systemd/system/mc-manager-agent.service.d/files.conf
+sudo nano /etc/systemd/system/mc-manager-agent.service.d/files.conf
+sudo systemctl daemon-reload
+sudo systemctl restart mc-manager-agent
+```
+
+Replace both the path in `files.conf` and `server_user` in the ACL commands with
+the real server directory and service user. Do not expose an entire home
+directory when the Minecraft files occupy only one subdirectory.
+
+After the agent restarts, refresh the dashboard. Servers with file access
+enabled show **Manage files**. Saves include a content version, so the dashboard
+refuses to overwrite a file that changed on disk after it was opened. Uploads
+require a separate overwrite confirmation when a filename already exists.
+
 ### Player join, transfer, and leave messages
 
 The controller can post one Discord message for each player's network session.

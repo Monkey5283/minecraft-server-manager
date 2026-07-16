@@ -12,15 +12,27 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from pydantic import BaseModel
 
 from .config import AgentConfig, AgentServer, ConfigError, load_agent_config
+from .file_manager import FileManagerError, ServerFileManager
 from .minecraft_query import MinecraftQueryError, query_players
 
 
 LOG = logging.getLogger("mc_manager.agent")
 MAX_OUTPUT = 32_000
 MAX_JOBS = 200
+
+
+class FileWriteRequest(BaseModel):
+    path: str
+    content: str
+    expected_version: str | None = None
+
+
+class DirectoryCreateRequest(BaseModel):
+    path: str
 
 
 class CommandFailed(RuntimeError):
@@ -50,6 +62,11 @@ class AgentRuntime:
         self.config = config
         self.servers = {server.id: server for server in config.servers}
         self.locks = {server.id: asyncio.Lock() for server in config.servers}
+        self.file_managers = {
+            server.id: ServerFileManager(server.file_manager)
+            for server in config.servers
+            if server.file_manager is not None
+        }
         self.jobs: OrderedDict[str, Job] = OrderedDict()
 
     async def execute_steps(
@@ -137,6 +154,19 @@ def create_agent_app(config: AgentConfig) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown server")
         return server
 
+    def find_file_manager(server_id: str) -> tuple[AgentServer, ServerFileManager]:
+        server = find_server(server_id)
+        manager = runtime.file_managers.get(server_id)
+        if manager is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="File manager is not enabled for this server",
+            )
+        return server, manager
+
+    def file_error(exc: FileManagerError) -> HTTPException:
+        return HTTPException(status_code=exc.status_code, detail=str(exc))
+
     @app.get("/v1/health")
     async def health() -> dict:
         return {"ok": True, "agent": config.name}
@@ -166,9 +196,105 @@ def create_agent_app(config: AgentConfig) -> FastAPI:
                     "detail": detail,
                     "actions": sorted(server.actions.keys() - {"status"}),
                     "scripts": sorted(server.scripts.keys()),
+                    "files_enabled": server.file_manager is not None,
                 }
             )
         return results
+
+    @app.get(
+        "/v1/servers/{server_id}/files",
+        dependencies=[Depends(authenticate)],
+    )
+    async def list_files(server_id: str, path: str = "") -> dict:
+        _, manager = find_file_manager(server_id)
+        try:
+            return manager.list_directory(path)
+        except FileManagerError as exc:
+            raise file_error(exc) from exc
+
+    @app.get(
+        "/v1/servers/{server_id}/files/content",
+        dependencies=[Depends(authenticate)],
+    )
+    async def read_file(server_id: str, path: str) -> dict:
+        _, manager = find_file_manager(server_id)
+        try:
+            return manager.read_text(path)
+        except FileManagerError as exc:
+            raise file_error(exc) from exc
+
+    @app.put(
+        "/v1/servers/{server_id}/files/content",
+        dependencies=[Depends(authenticate)],
+    )
+    async def write_file(server_id: str, payload: FileWriteRequest) -> dict:
+        server, manager = find_file_manager(server_id)
+        if runtime.locks[server.id].locked():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Server maintenance is in progress; try again when it finishes",
+            )
+        async with runtime.locks[server.id]:
+            try:
+                result = manager.write_text(
+                    payload.path, payload.content, payload.expected_version
+                )
+            except FileManagerError as exc:
+                raise file_error(exc) from exc
+        LOG.info("Saved managed file %s:%s", server.id, result["path"])
+        return result
+
+    @app.post(
+        "/v1/servers/{server_id}/files/directory",
+        dependencies=[Depends(authenticate)],
+    )
+    async def create_directory(
+        server_id: str, payload: DirectoryCreateRequest
+    ) -> dict:
+        server, manager = find_file_manager(server_id)
+        if runtime.locks[server.id].locked():
+            raise HTTPException(status_code=409, detail="Server maintenance is in progress")
+        async with runtime.locks[server.id]:
+            try:
+                result = manager.create_directory(payload.path)
+            except FileManagerError as exc:
+                raise file_error(exc) from exc
+        LOG.info("Created managed directory %s:%s", server.id, result["path"])
+        return result
+
+    @app.put(
+        "/v1/servers/{server_id}/files/upload",
+        dependencies=[Depends(authenticate)],
+    )
+    async def upload_file(
+        server_id: str,
+        request: Request,
+        path: str,
+        overwrite: bool = False,
+    ) -> dict:
+        server, manager = find_file_manager(server_id)
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                declared_size = int(content_length)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid Content-Length") from exc
+            if declared_size > manager.config.max_upload_size_bytes:
+                raise HTTPException(status_code=413, detail="Upload exceeds configured limit")
+        content = bytearray()
+        async for chunk in request.stream():
+            content.extend(chunk)
+            if len(content) > manager.config.max_upload_size_bytes:
+                raise HTTPException(status_code=413, detail="Upload exceeds configured limit")
+        if runtime.locks[server.id].locked():
+            raise HTTPException(status_code=409, detail="Server maintenance is in progress")
+        async with runtime.locks[server.id]:
+            try:
+                result = manager.upload(path, bytes(content), overwrite=overwrite)
+            except FileManagerError as exc:
+                raise file_error(exc) from exc
+        LOG.info("Uploaded managed file %s:%s", server.id, result["path"])
+        return result
 
     @app.get(
         "/v1/servers/{server_id}/players",

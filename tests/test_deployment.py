@@ -37,6 +37,28 @@ def test_linuxgsm_override_exposes_home_and_host_tmp():
     assert "PrivateTmp=false" in override
 
 
+def test_dashboard_assets_include_opt_in_file_manager_controls():
+    static = ROOT / "mc_manager" / "static"
+    html = (static / "index.html").read_text()
+    javascript = (static / "app.js").read_text()
+
+    assert 'id="file-manager"' in html
+    assert 'id="editor-content"' in html
+    assert "server.files_enabled" in javascript
+    assert "expected_version" in javascript
+    assert "application/octet-stream" in javascript
+
+
+def test_home_file_manager_override_is_narrow_and_opt_in():
+    override = (
+        ROOT / "deploy/systemd/mc-manager-agent-home-files.conf.example"
+    ).read_text()
+
+    assert "ProtectHome=read-only" in override
+    assert "ReadWritePaths=/home/minecraft-user/server-directory" in override
+    assert "ReadWritePaths=/home\n" not in override
+
+
 def test_agent_installers_include_network_plugin_updater_and_template():
     for installer_name in ("bootstrap-minecraft-manager", "update-minecraft-manager"):
         installer = (ROOT / "deploy/scripts" / installer_name).read_text()

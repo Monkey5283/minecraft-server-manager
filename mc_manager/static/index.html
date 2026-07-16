@@ -37,6 +37,54 @@
           <div id="notice" class="notice" hidden></div>
           <div id="servers" class="server-grid"></div>
         </section>
+
+        <section id="file-manager" hidden>
+          <div class="file-manager-heading">
+            <div>
+              <p class="eyebrow">SERVER FILES</p>
+              <h2 id="file-server-name"></h2>
+            </div>
+            <button id="close-files" class="secondary">Back to servers</button>
+          </div>
+
+          <div id="file-notice" class="notice" hidden></div>
+          <div class="file-toolbar">
+            <nav id="file-breadcrumbs" class="breadcrumbs" aria-label="Current directory"></nav>
+            <div class="file-actions">
+              <button id="new-file" class="secondary">New file</button>
+              <button id="new-folder" class="secondary">New folder</button>
+              <button id="upload-file">Upload</button>
+              <input id="upload-input" type="file" hidden />
+            </div>
+          </div>
+
+          <div class="file-workspace">
+            <div class="file-browser panel">
+              <div class="file-list-heading">
+                <span>Name</span>
+                <span>Size</span>
+                <span>Modified</span>
+              </div>
+              <div id="file-list" class="file-list"></div>
+              <p id="empty-directory" class="empty-state" hidden>This directory is empty.</p>
+            </div>
+
+            <aside id="file-editor" class="file-editor panel" hidden>
+              <div class="editor-heading">
+                <div>
+                  <p class="eyebrow">TEXT EDITOR</p>
+                  <h3 id="editor-file-name"></h3>
+                </div>
+                <button id="close-editor" class="secondary">Close</button>
+              </div>
+              <textarea id="editor-content" spellcheck="false" aria-label="File content"></textarea>
+              <div class="editor-footer">
+                <span id="editor-status"></span>
+                <button id="save-file">Save changes</button>
+              </div>
+            </aside>
+          </div>
+        </section>
       </main>
     </div>
 

@@ -75,6 +75,13 @@ class PlayerQueryConfig:
 
 
 @dataclass(frozen=True)
+class FileManagerConfig:
+    root: Path
+    max_edit_size_bytes: int = 2 * 1024 * 1024
+    max_upload_size_bytes: int = 32 * 1024 * 1024
+
+
+@dataclass(frozen=True)
 class AgentServer:
     id: str
     name: str
@@ -84,6 +91,7 @@ class AgentServer:
     timeout_seconds: int = 120
     update_timeout_seconds: int = 1800
     player_query: PlayerQueryConfig | None = None
+    file_manager: FileManagerConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -183,6 +191,37 @@ def load_agent_config(path: str | Path) -> AgentConfig:
             )
             for name, command in raw.get("scripts", {}).items()
         }
+        raw_file_manager = raw.get("file_manager")
+        file_manager = None
+        if raw_file_manager is not None:
+            if not isinstance(raw_file_manager, dict):
+                raise ConfigError(f"{server_id}.file_manager must be a table")
+            if bool(raw_file_manager.get("enabled", False)):
+                raw_root = Path(str(raw_file_manager.get("root", working_directory)))
+                file_root = (
+                    raw_root if raw_root.is_absolute() else working_directory / raw_root
+                ).resolve()
+                max_edit_size = int(
+                    raw_file_manager.get("max_edit_size_bytes", 2 * 1024 * 1024)
+                )
+                max_upload_size = int(
+                    raw_file_manager.get("max_upload_size_bytes", 32 * 1024 * 1024)
+                )
+                if not 1024 <= max_edit_size <= 10 * 1024 * 1024:
+                    raise ConfigError(
+                        f"{server_id}.file_manager.max_edit_size_bytes must be "
+                        "between 1024 and 10485760"
+                    )
+                if not 1024 <= max_upload_size <= 128 * 1024 * 1024:
+                    raise ConfigError(
+                        f"{server_id}.file_manager.max_upload_size_bytes must be "
+                        "between 1024 and 134217728"
+                    )
+                file_manager = FileManagerConfig(
+                    root=file_root,
+                    max_edit_size_bytes=max_edit_size,
+                    max_upload_size_bytes=max_upload_size,
+                )
         raw_player_query = raw.get("player_query")
         player_query = None
         if raw_player_query is not None:
@@ -230,6 +269,7 @@ def load_agent_config(path: str | Path) -> AgentConfig:
                 timeout_seconds=int(raw.get("timeout_seconds", 120)),
                 update_timeout_seconds=int(raw.get("update_timeout_seconds", 1800)),
                 player_query=player_query,
+                file_manager=file_manager,
             )
         )
     if not servers:

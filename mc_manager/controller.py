@@ -25,11 +25,22 @@ from .ups import UPSMonitor
 
 LOG = logging.getLogger("mc_manager.controller")
 STATIC_DIR = Path(__file__).parent / "static"
+MAX_PROXY_UPLOAD_BYTES = 128 * 1024 * 1024
 
 
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class FileWriteRequest(BaseModel):
+    path: str
+    content: str
+    expected_version: str | None = None
+
+
+class DirectoryCreateRequest(BaseModel):
+    path: str
 
 
 def create_controller_app(config: ControllerConfig) -> FastAPI:
@@ -160,6 +171,13 @@ def create_controller_app(config: ControllerConfig) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown server")
         return server
 
+    def agent_file_error(exc: AgentUnavailable) -> HTTPException:
+        allowed_statuses = {400, 403, 404, 409, 413, 415}
+        response_status = (
+            exc.status_code if exc.status_code in allowed_statuses else 502
+        )
+        return HTTPException(status_code=response_status, detail=str(exc))
+
     @app.get("/api/session")
     async def session(request: Request) -> dict:
         return {
@@ -224,6 +242,78 @@ def create_controller_app(config: ControllerConfig) -> FastAPI:
             return await agents.script(find_server(server_id), script_name)
         except AgentUnavailable as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/servers/{server_id}/files")
+    async def files(server_id: str, request: Request, path: str = "") -> dict:
+        require_login(request)
+        try:
+            return await agents.files(find_server(server_id), path)
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+    @app.get("/api/servers/{server_id}/files/content")
+    async def file_content(server_id: str, path: str, request: Request) -> dict:
+        require_login(request)
+        try:
+            return await agents.file_content(find_server(server_id), path)
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+    @app.put("/api/servers/{server_id}/files/content")
+    async def save_file(
+        server_id: str, payload: FileWriteRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        try:
+            return await agents.save_file(
+                find_server(server_id),
+                payload.path,
+                payload.content,
+                payload.expected_version,
+            )
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+    @app.post("/api/servers/{server_id}/files/directory")
+    async def create_directory(
+        server_id: str, payload: DirectoryCreateRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        try:
+            return await agents.create_directory(find_server(server_id), payload.path)
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+    @app.put("/api/servers/{server_id}/files/upload")
+    async def upload_file(
+        server_id: str,
+        request: Request,
+        path: str,
+        overwrite: bool = False,
+    ) -> dict:
+        require_login(request)
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                declared_size = int(content_length)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid Content-Length") from exc
+            if declared_size > MAX_PROXY_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Upload exceeds proxy limit")
+        content = bytearray()
+        async for chunk in request.stream():
+            content.extend(chunk)
+            if len(content) > MAX_PROXY_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Upload exceeds proxy limit")
+        try:
+            return await agents.upload_file(
+                find_server(server_id),
+                path,
+                bytes(content),
+                overwrite=overwrite,
+            )
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
 
     @app.get("/api/servers/{server_id}/jobs/{job_id}")
     async def job(server_id: str, job_id: str, request: Request) -> dict:

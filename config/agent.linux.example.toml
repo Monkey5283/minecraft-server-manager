@@ -18,6 +18,14 @@ host = "127.0.0.1"
 port = 25565
 timeout_seconds = 3
 
+# Optional dashboard file browser/editor. Access is confined to this root and
+# remains disabled unless this block explicitly sets enabled = true.
+[servers.file_manager]
+enabled = true
+root = "/srv/minecraft/survival"
+max_edit_size_bytes = 2097152
+max_upload_size_bytes = 33554432
+
 # Every entry is an argv array (or a list of argv arrays). No shell is used.
 [servers.actions]
 start = [["sudo", "-n", "/usr/bin/systemctl", "start", "minecraft@survival.service"]]

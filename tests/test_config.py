@@ -31,6 +31,67 @@ backup = [["backup-tool", "survival"]]
     assert loaded.servers[0].scripts["backup"] == (("backup-tool", "survival"),)
 
 
+def test_agent_loads_opt_in_file_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TEST_AGENT_TOKEN", "secret")
+    server_root = tmp_path / "server"
+    config = tmp_path / "agent.toml"
+    config.write_text(
+        f"""
+[agent]
+token_env = "TEST_AGENT_TOKEN"
+[[servers]]
+id = "survival"
+working_directory = {str(server_root)!r}
+[servers.file_manager]
+enabled = true
+root = "."
+max_edit_size_bytes = 4096
+max_upload_size_bytes = 8192
+[servers.actions]
+start = ["service", "start"]
+stop = ["service", "stop"]
+restart = ["service", "restart"]
+status = ["service", "status"]
+""",
+        encoding="utf-8",
+    )
+
+    loaded = load_agent_config(config)
+    files = loaded.servers[0].file_manager
+
+    assert files is not None
+    assert files.root == server_root.resolve()
+    assert files.max_edit_size_bytes == 4096
+    assert files.max_upload_size_bytes == 8192
+
+
+def test_agent_rejects_unsafe_file_manager_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("TEST_AGENT_TOKEN", "secret")
+    config = tmp_path / "agent.toml"
+    config.write_text(
+        """
+[agent]
+token_env = "TEST_AGENT_TOKEN"
+[[servers]]
+id = "survival"
+[servers.file_manager]
+enabled = true
+max_edit_size_bytes = 999999999
+[servers.actions]
+start = ["service", "start"]
+stop = ["service", "stop"]
+restart = ["service", "restart"]
+status = ["service", "status"]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="max_edit_size_bytes"):
+        load_agent_config(config)
+
+
 def test_agent_rejects_arbitrary_action(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("TEST_AGENT_TOKEN", "secret")
     config = tmp_path / "agent.toml"

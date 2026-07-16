@@ -1,0 +1,6 @@
+[Service]
+# ProtectHome=true in the base unit deliberately hides /home. When a configured
+# file-manager root lives there, copy this file as a systemd override and replace
+# the example path with the exact Minecraft server directory.
+ProtectHome=read-only
+ReadWritePaths=/home/minecraft-user/server-directory
