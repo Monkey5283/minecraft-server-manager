@@ -4,7 +4,9 @@ import hashlib
 import os
 import stat
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import BinaryIO, Iterator
 
 from .config import FileManagerConfig
 
@@ -39,6 +41,25 @@ class FileNotEditable(FileManagerError):
 
 def _version(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+@dataclass
+class ManagedDownload:
+    path: str
+    name: str
+    size: int
+    handle: BinaryIO
+
+    def iter_chunks(self, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+        try:
+            while chunk := self.handle.read(chunk_size):
+                yield chunk
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        if not self.handle.closed:
+            self.handle.close()
 
 
 class ServerFileManager:
@@ -150,6 +171,33 @@ class ServerFileManager:
             "size": len(content),
             "version": _version(content),
         }
+
+    def open_download(self, raw_path: str) -> ManagedDownload:
+        normalized, target = self._resolve(raw_path, allow_root=False)
+        file_descriptor = -1
+        try:
+            flags = os.O_RDONLY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            file_descriptor = os.open(target, flags)
+            opened_stat = os.fstat(file_descriptor)
+            if not stat.S_ISREG(opened_stat.st_mode):
+                raise FileConflict("Requested path is not a regular file")
+            handle = os.fdopen(file_descriptor, "rb")
+            file_descriptor = -1
+        except FileManagerError:
+            raise
+        except OSError as exc:
+            raise self._translate_os_error(exc, "Could not download file") from exc
+        finally:
+            if file_descriptor >= 0:
+                os.close(file_descriptor)
+        return ManagedDownload(
+            path=normalized,
+            name=PurePosixPath(normalized).name,
+            size=opened_stat.st_size,
+            handle=handle,
+        )
 
     @staticmethod
     def _atomic_write(target: Path, content: bytes, existing_stat: os.stat_result | None) -> None:

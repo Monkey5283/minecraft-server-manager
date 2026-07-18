@@ -7,6 +7,12 @@ from mc_manager.config import ControllerConfig, RemoteServer
 from mc_manager.controller import create_controller_app
 
 
+class DownloadStream(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b"jar "
+        yield b"bytes"
+
+
 def controller_config() -> ControllerConfig:
     return ControllerConfig(
         bind="127.0.0.1",
@@ -56,6 +62,13 @@ async def test_controller_file_routes_require_dashboard_login_and_proxy_operatio
         "size": 9,
         "version": "upload-version",
     }
+    agent_download = httpx.Response(
+        200,
+        headers={"Content-Length": "9"},
+        stream=DownloadStream(),
+        request=httpx.Request("GET", "http://agent/download"),
+    )
+    agents.download_file.return_value = agent_download
     monkeypatch.setattr("mc_manager.controller.AgentClient", lambda: agents)
     monkeypatch.setattr("mc_manager.controller.MinecraftDiscordBot", lambda *a, **k: object())
     app = create_controller_app(controller_config())
@@ -64,6 +77,12 @@ async def test_controller_file_routes_require_dashboard_login_and_proxy_operatio
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         unauthorized = await client.get("/api/servers/survival/files")
         assert unauthorized.status_code == 401
+        unauthorized_download = await client.get(
+            "/api/servers/survival/files/download",
+            params={"path": "plugins/example.jar"},
+        )
+        assert unauthorized_download.status_code == 401
+        agents.download_file.assert_not_awaited()
 
         logged_in = await client.post(
             "/api/login", json={"username": "admin", "password": "password"}
@@ -80,6 +99,19 @@ async def test_controller_file_routes_require_dashboard_login_and_proxy_operatio
             params={"path": "server.properties"},
         )
         assert opened.json()["content"] == "motd=Monkeycraft\n"
+
+        downloaded = await client.get(
+            "/api/servers/survival/files/download",
+            params={"path": "plugins/example.jar"},
+        )
+        assert downloaded.status_code == 200
+        assert downloaded.content == b"jar bytes"
+        assert downloaded.headers["content-length"] == "9"
+        assert downloaded.headers["content-type"] == "application/octet-stream"
+        assert "filename*=UTF-8''example.jar" in downloaded.headers[
+            "content-disposition"
+        ]
+        assert downloaded.headers["cache-control"] == "no-store"
 
         saved = await client.put(
             "/api/servers/survival/files/content",
@@ -107,6 +139,7 @@ async def test_controller_file_routes_require_dashboard_login_and_proxy_operatio
     server = controller_config().servers[0]
     agents.files.assert_awaited_once_with(server, "plugins")
     agents.file_content.assert_awaited_once_with(server, "server.properties")
+    agents.download_file.assert_awaited_once_with(server, "plugins/example.jar")
     agents.save_file.assert_awaited_once_with(
         server, "server.properties", "motd=Updated\n", "version-one"
     )
@@ -114,6 +147,7 @@ async def test_controller_file_routes_require_dashboard_login_and_proxy_operatio
     agents.upload_file.assert_awaited_once_with(
         server, "plugins/example.jar", b"jar bytes", overwrite=True
     )
+    assert agent_download.is_closed is True
 
 
 async def test_controller_preserves_safe_agent_file_conflict_status(monkeypatch):

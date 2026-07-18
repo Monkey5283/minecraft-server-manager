@@ -56,8 +56,15 @@ def test_file_manager_rejects_traversal_symlinks_binary_and_oversized_text(
         manager.read_text("../secret.txt")
     with pytest.raises(FileNotEditable):
         manager.read_text("binary.dat")
+    download = manager.open_download("binary.dat")
+    assert b"".join(download.iter_chunks(chunk_size=2)) == b"abc\x00def"
+    assert download.handle.closed is True
     with pytest.raises(FileTooLarge):
         manager.read_text("large.txt")
+    assert b"".join(manager.open_download("large.txt").iter_chunks()) == b"x" * 20
+
+    with pytest.raises(InvalidFilePath):
+        manager.open_download("../secret.txt")
 
     link = root / "outside-link"
     try:
@@ -66,6 +73,8 @@ def test_file_manager_rejects_traversal_symlinks_binary_and_oversized_text(
         return
     with pytest.raises(InvalidFilePath):
         manager.read_text("outside-link")
+    with pytest.raises(InvalidFilePath):
+        manager.open_download("outside-link")
     assert "outside-link" not in {
         entry["name"] for entry in manager.list_directory("")["entries"]
     }
@@ -98,6 +107,7 @@ async def test_agent_file_api_is_authenticated_scoped_and_conflict_safe(tmp_path
     root = tmp_path / "server"
     root.mkdir()
     (root / "server.properties").write_bytes(b"motd=One\n")
+    (root / "binary.dat").write_bytes(b"abc\x00def")
     server = AgentServer(
         id="survival",
         name="Survival",
@@ -125,12 +135,21 @@ async def test_agent_file_api_is_authenticated_scoped_and_conflict_safe(tmp_path
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         assert (await client.get("/v1/servers/survival/files")).status_code == 401
+        assert (
+            await client.get(
+                "/v1/servers/survival/files/download",
+                params={"path": "binary.dat"},
+            )
+        ).status_code == 401
         status_response = await client.get("/v1/servers", headers=headers)
         assert status_response.json()[0]["files_enabled"] is True
 
         listing = await client.get("/v1/servers/survival/files", headers=headers)
         assert listing.status_code == 200
-        assert listing.json()["entries"][0]["name"] == "server.properties"
+        assert {entry["name"] for entry in listing.json()["entries"]} == {
+            "binary.dat",
+            "server.properties",
+        }
 
         traversal = await client.get(
             "/v1/servers/survival/files/content",
@@ -145,6 +164,25 @@ async def test_agent_file_api_is_authenticated_scoped_and_conflict_safe(tmp_path
             headers=headers,
         )
         version = opened.json()["version"]
+        downloaded = await client.get(
+            "/v1/servers/survival/files/download",
+            params={"path": "binary.dat"},
+            headers=headers,
+        )
+        assert downloaded.status_code == 200
+        assert downloaded.content == b"abc\x00def"
+        assert downloaded.headers["content-type"] == "application/octet-stream"
+        assert "filename*=UTF-8''binary.dat" in downloaded.headers[
+            "content-disposition"
+        ]
+        assert downloaded.headers["cache-control"] == "no-store"
+
+        download_traversal = await client.get(
+            "/v1/servers/survival/files/download",
+            params={"path": "../outside"},
+            headers=headers,
+        )
+        assert download_traversal.status_code == 400
         saved = await client.put(
             "/v1/servers/survival/files/content",
             headers=headers,

@@ -121,50 +121,6 @@ textarea {
   width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--green);
   border-radius: 50%; animation: spin .7s linear infinite;
 }
-.registry-panel { margin-bottom: 18px; }
-.registry-heading, .registry-heading-actions, .registry-item-heading, .registry-item-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.registry-heading { align-items: flex-start; }
-.registry-heading-actions, .registry-item-actions { justify-content: flex-start; }
-.registry-help {
-  max-width: 760px;
-  margin: 14px 0 20px;
-  color: var(--muted);
-  font-size: .88rem;
-  line-height: 1.55;
-}
-.registry-columns {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 22px;
-}
-.registry-columns h3 { margin-bottom: 10px; font-size: 1rem; }
-.registry-list { display: grid; gap: 10px; }
-.registry-item {
-  display: grid;
-  gap: 13px;
-  min-width: 0;
-  padding: 15px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: rgba(9, 14, 12, .45);
-}
-.registry-item-heading { align-items: flex-start; }
-.registry-item h4 { margin: 0; overflow-wrap: anywhere; font-size: 1rem; }
-.registry-item .server-id { overflow-wrap: anywhere; }
-.registry-item-detail { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.45; }
-.registry-checkbox {
-  display: flex;
-  grid-template-columns: none;
-  align-items: center;
-  gap: 9px;
-}
-.registry-checkbox input { width: auto; margin: 0; accent-color: var(--green); }
-.registry-empty { border: 1px dashed var(--line); border-radius: 10px; }
 .file-manager-heading, .file-toolbar, .editor-heading, .editor-footer {
   display: flex;
   align-items: center;
@@ -189,7 +145,7 @@ textarea {
 .file-browser, .file-editor { padding: 0; overflow: hidden; }
 .file-list-heading, .file-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 110px minmax(170px, 220px);
+  grid-template-columns: minmax(220px, 1fr) 110px minmax(170px, 220px) 100px;
   align-items: center;
   gap: 12px;
   min-height: 48px;
@@ -229,6 +185,8 @@ textarea {
   color: var(--muted);
   opacity: .65;
 }
+.file-entry-actions { display: flex; justify-content: flex-end; }
+.file-download { padding: 7px 10px; font-size: .75rem; }
 .empty-state {
   margin: 0;
   padding: 28px 16px;
@@ -250,15 +208,15 @@ textarea {
   header { align-items: flex-start; flex-direction: column; padding: 28px 0; }
   .header-actions { flex-wrap: wrap; }
   .scripts { grid-template-columns: 1fr; }
-  .registry-heading, .file-manager-heading, .file-toolbar, .editor-footer {
+  .file-manager-heading, .file-toolbar, .editor-footer {
     align-items: stretch;
     flex-direction: column;
   }
-  .registry-heading-actions button { flex: 1; }
-  .registry-columns { grid-template-columns: 1fr; }
   .file-actions { width: 100%; }
   .file-actions button { flex: 1; }
   .file-list-heading { display: none; }
   .file-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; }
-  .file-row span:last-child { grid-column: 1 / -1; font-size: .72rem; }
+  .file-size { grid-column: 1; }
+  .file-modified { grid-column: 1 / -1; font-size: .72rem; }
+  .file-entry-actions { grid-column: 2; grid-row: 1 / 3; }
 }

@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Minecraft Server Control</title>
-    <link rel="stylesheet" href="/static/style.css?v=server-registry-1" />
-    <script src="/static/app.js?v=server-registry-1" defer></script>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="/static/app.js" defer></script>
   </head>
   <body>
     <div class="shell">
@@ -16,7 +16,6 @@
         </div>
         <div class="header-actions">
           <span id="last-updated"></span>
-          <button id="manage-servers" class="secondary" hidden>Server setup</button>
           <button id="refresh" class="secondary" hidden>Refresh</button>
           <button id="logout" class="secondary" hidden>Sign out</button>
         </div>
@@ -36,33 +35,6 @@
 
         <section id="dashboard" hidden>
           <div id="notice" class="notice" hidden></div>
-          <section id="server-registry" class="panel registry-panel" hidden>
-            <div class="registry-heading">
-              <div>
-                <p class="eyebrow">SERVER SETUP</p>
-                <h2>Add another server</h2>
-              </div>
-              <div class="registry-heading-actions">
-                <button id="discover-servers" class="secondary">Scan agents</button>
-                <button id="close-server-registry" class="secondary">Close</button>
-              </div>
-            </div>
-            <p class="registry-help">
-              Servers already configured on your trusted agents appear here automatically.
-              Adding one registers it with this dashboard; it does not create server files or a service.
-            </p>
-            <div id="registry-notice" class="notice" hidden></div>
-            <div class="registry-columns">
-              <section>
-                <h3>Configured</h3>
-                <div id="configured-servers" class="registry-list"></div>
-              </section>
-              <section>
-                <h3>Ready to add</h3>
-                <div id="discovered-servers" class="registry-list"></div>
-              </section>
-            </div>
-          </section>
           <div id="servers" class="server-grid"></div>
         </section>
 
@@ -92,6 +64,7 @@
                 <span>Name</span>
                 <span>Size</span>
                 <span>Modified</span>
+                <span>Actions</span>
               </div>
               <div id="file-list" class="file-list"></div>
               <p id="empty-directory" class="empty-state" hidden>This directory is empty.</p>

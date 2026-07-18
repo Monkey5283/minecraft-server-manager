@@ -10,10 +10,13 @@ import uuid
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from .config import AgentConfig, AgentServer, ConfigError, load_agent_config
 from .file_manager import FileManagerError, ServerFileManager
@@ -197,7 +200,6 @@ def create_agent_app(config: AgentConfig) -> FastAPI:
                     "actions": sorted(server.actions.keys() - {"status"}),
                     "scripts": sorted(server.scripts.keys()),
                     "files_enabled": server.file_manager is not None,
-                    "player_tracking_available": server.player_query is not None,
                 }
             )
         return results
@@ -223,6 +225,31 @@ def create_agent_app(config: AgentConfig) -> FastAPI:
             return manager.read_text(path)
         except FileManagerError as exc:
             raise file_error(exc) from exc
+
+    @app.get(
+        "/v1/servers/{server_id}/files/download",
+        dependencies=[Depends(authenticate)],
+    )
+    async def download_file(server_id: str, path: str) -> StreamingResponse:
+        _, manager = find_file_manager(server_id)
+        try:
+            download = manager.open_download(path)
+        except FileManagerError as exc:
+            raise file_error(exc) from exc
+        encoded_name = quote(download.name, safe="")
+        return StreamingResponse(
+            download.iter_chunks(),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": (
+                    f"attachment; filename*=UTF-8''{encoded_name}"
+                ),
+                "Content-Length": str(download.size),
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+            background=BackgroundTask(download.close),
+        )
 
     @app.put(
         "/v1/servers/{server_id}/files/content",

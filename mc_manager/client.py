@@ -110,6 +110,36 @@ class AgentClient:
             raise AgentUnavailable(f"{server.name}: agent returned invalid file content")
         return result
 
+    async def download_file(
+        self,
+        server: RemoteServer,
+        path: str,
+    ) -> httpx.Response:
+        request = self.client.build_request(
+            "GET",
+            f"{server.agent_url}/v1/servers/{server.id}/files/download",
+            headers=self._headers(server),
+            params={"path": path},
+        )
+        try:
+            response = await self.client.send(request, stream=True)
+            if response.is_error:
+                await response.aread()
+                response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as exc:
+            try:
+                detail = exc.response.json().get("detail", exc.response.text)
+            except ValueError:
+                detail = exc.response.text
+            await exc.response.aclose()
+            raise AgentUnavailable(
+                f"{server.name}: agent returned {exc.response.status_code}: {detail}",
+                status_code=exc.response.status_code,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise AgentUnavailable(f"{server.name}: agent is unreachable") from exc
+
     async def save_file(
         self,
         server: RemoteServer,

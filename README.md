@@ -1,312 +1,377 @@
 # Minecraft Server Manager
 
-Control Ubuntu Minecraft servers from Discord or a private web dashboard.
+Minecraft Server Manager is a self-hosted control panel for Minecraft servers.
+It provides a private web dashboard and Discord commands for checking status,
+starting, stopping, and restarting servers.
 
-The Raspberry Pi runs the controller. Each Ubuntu Minecraft machine runs a
-small agent that can only execute commands listed in its local configuration.
+The manager has two parts:
 
-## What you need
+- **Controller:** runs the dashboard and Discord bot.
+- **Agent:** runs on each Minecraft host and executes only the commands you
+  explicitly allow.
 
-- Raspberry Pi with Raspberry Pi OS Lite 64-bit
-- Ubuntu machines running the Minecraft servers
-- A Discord bot token
-- Tailscale on the Pi and on devices that may open the dashboard
-- Fixed LAN addresses or DHCP reservations for the Pi and Ubuntu machines
-- Optional: a USB UPS on the Pi, configured with NUT
+The controller and agents are intended for a trusted LAN, VPN, or private
+overlay network. Do not expose their ports directly to the internet.
 
-Do not forward the dashboard or agent ports through your router.
+## Features
 
-## 1. Install the controller on the Pi
+- Start, stop, restart, update, and check Minecraft servers
+- Manage multiple servers across multiple Linux hosts
+- Control access through Discord users, roles, or administrators
+- Use a password-protected web dashboard
+- Optionally browse, edit, upload, and download server files from the dashboard
+- Optionally track Paper players and server transfers
+- Optionally monitor a UPS and perform an orderly shutdown
+- Run only allowlisted agent commands without a shell
 
-Run:
+## Requirements
+
+- A controller running systemd, Python 3.11 or newer, and a Debian-based Linux
+  distribution such as Ubuntu Server or Raspberry Pi OS
+- One or more Linux hosts running Minecraft as a systemd service
+- Network access from the controller to each agent
+- A Discord application and bot token
+- A Git client and an account that can read this repository
+- Optional: Tailscale for private remote dashboard access
+
+The installer creates a dedicated `mcmanager` service account, a Python virtual
+environment, configuration files, and systemd services.
+
+## 1. Create a Discord bot
+
+In the [Discord Developer Portal](https://discord.com/developers/applications):
+
+1. Create an application and add a bot.
+2. Copy the bot token and keep it private.
+3. Under **Installation**, configure a Guild Install with the `bot` and
+   `applications.commands` scopes.
+4. Give the bot **View Channels** and **Send Messages**, copy the install link,
+   and add it to your Discord server.
+5. Enable Discord Developer Mode if you want to copy server, channel, user, or
+   role IDs.
+
+No privileged Discord intents are required.
+
+## 2. Install the controller
+
+Run these commands on the machine that will host the dashboard and Discord bot:
 
 ```bash
 sudo apt update
 sudo apt install -y git
-cd ~
 git clone https://github.com/Monkey5283/minecraft-server-manager.git
-
-sudo bash ~/minecraft-server-manager/deploy/scripts/bootstrap-minecraft-manager \
+cd minecraft-server-manager
+sudo bash deploy/scripts/bootstrap-minecraft-manager \
   controller https://github.com/Monkey5283/minecraft-server-manager.git main
 ```
 
-The installer creates configuration files without starting the controller.
+The installer prepares the controller but does not start it until you finish
+the configuration.
 
-## 2. Configure the controller
+### Configure the controller
 
-Open the main configuration:
+Open the controller configuration:
 
 ```bash
 sudo nano /etc/minecraft-manager/controller.toml
 ```
 
-For every Minecraft server, set:
-
-- `id`: short lowercase name such as `survival`
-- `name`: name displayed in Discord and the dashboard
-- `agent_url`: Ubuntu machine's LAN address, such as
-  `http://192.168.1.31:8766`
-- `token_env`: unique environment-variable name for that machine
-
-Remove example server entries you do not need.
-
-Under `[discord]`, set `announcement_channel_id` to the Discord text channel
-that should receive a message whenever the controller comes online. Enable
-Discord Developer Mode, right-click the channel, and choose **Copy Channel ID**.
-Set it to `0` to disable announcements.
-
-The bot also uses this channel for its editable UPS status message unless a
-different UPS status channel is configured. Give the bot **View Channel** and
-**Send Messages** permissions in that channel. It does not need a new Discord
-secret, privileged intent, or **Manage Messages** permission.
-
-The health presence is enabled by default. These optional settings make the
-defaults explicit:
+For a simple one-server installation, replace its contents with the following
+and change the values marked in comments:
 
 ```toml
+[controller]
+bind = "127.0.0.1"
+port = 8080
+
+[auth]
+web_username = "admin"
+web_password_env = "MC_WEB_PASSWORD"
+session_secret_env = "MC_SESSION_SECRET"
+cookie_secure = false
+
 [discord]
+discord_token_env = "DISCORD_BOT_TOKEN"
+# Replace 0 with your Discord server ID for faster command registration.
+guild_id = 0
+# Replace 0 with a channel ID to enable startup announcements.
+announcement_channel_id = 0
 health_presence_enabled = true
-health_poll_interval_seconds = 30
+# Discord administrators are always allowed. Add user or role IDs as needed.
+allowed_user_ids = []
+allowed_role_ids = []
+
+[[servers]]
+id = "survival"
+name = "Survival"
+# Use the agent host's private hostname or private address.
+agent_url = "http://minecraft-host.local:8766"
+token_env = "MC_AGENT_TOKEN_SURVIVAL_HOST"
 ```
 
-Then open the secret file:
+Server IDs must use lowercase letters, numbers, hyphens, or underscores. The
+same `id` must be used in the controller and agent configuration.
+
+### Customize the public `/instructions` command
+
+Any member of the Discord server can use `/instructions`; it does not use the
+manager user or role allowlists. Add an `[instructions]` table to
+`/etc/minecraft-manager/controller.toml` and replace the uppercase placeholders
+in this template:
+
+```toml
+[instructions]
+message = """
+***HOW TO JOIN YOUR_SERVER_NAME***
+
+**Java Edition - Windows, macOS, or Linux**
+Go to **Multiplayer -> Add Server**.
+**Server Address:** `YOUR_JAVA_HOSTNAME:YOUR_JAVA_PORT`
+Click **Done**, select the server, and click **Join Server**.
+
+**Bedrock Edition - Windows, iPhone/iPad, or Android**
+Go to **Play -> Servers -> Add Server**.
+**Server Name:** `YOUR_SERVER_NAME`
+**Server Address:** `YOUR_BEDROCK_HOSTNAME`
+**Port:** `YOUR_BEDROCK_PORT`
+The server name cannot be empty. Click **Add and Play**.
+
+**Console Bedrock Edition - Xbox, PlayStation, Nintendo Switch, and Switch 2**
+No mobile app, DNS changes, ads, or server address entry are required.
+
+**First-time setup:**
+1. Sign in to Minecraft with your Microsoft account.
+2. Go to **Play -> Friends -> Add Friend/Find Cross-Platform Friends**.
+3. Search for and add **`YOUR_CONSOLE_JOIN_GAMERTAG`**.
+4. Wait up to one minute for it to add you back.
+5. Return to **Play -> Friends -> Joinable Friends**.
+6. Select the server session and join.
+
+After setup, open **Play -> Friends** and select the server whenever you want to play.
+
+If it does not appear, fully close and reopen Minecraft. Make sure cross-network multiplayer is allowed and you have the required console subscription.
+"""
+```
+
+The message supports Discord Markdown and must contain between 1 and 2,000
+characters. Discord mentions are suppressed so custom instructions cannot ping
+users or roles. If you do not run the console friend broadcaster, replace or
+remove the console section. Restart `mc-manager-controller` after changing the
+message so the command uses the new text.
+
+Next, open the controller secrets file:
 
 ```bash
 sudo nano /etc/minecraft-manager/controller.env
 ```
 
-It should resemble:
+Set the following values:
 
 ```ini
-DISCORD_BOT_TOKEN=your-discord-bot-token
-MC_WEB_PASSWORD=choose-a-dashboard-password
-MC_SESSION_SECRET=generated-random-value
-MC_AGENT_TOKEN_HOST1=another-generated-random-value
+DISCORD_BOT_TOKEN=replace-with-your-bot-token
+MC_WEB_PASSWORD=replace-with-a-strong-dashboard-password
+MC_SESSION_SECRET=replace-with-a-random-secret
+MC_AGENT_TOKEN_SURVIVAL_HOST=replace-with-a-different-random-token
 ```
 
-Generate random values with:
+Generate secure random values with:
 
 ```bash
 openssl rand -hex 32
 ```
 
-Each Ubuntu host should have its own agent token.
+Use a different agent token for every Minecraft host. The token is shared only
+between that agent and the controller.
 
-### Optional: UPS shutdown automation
+## 3. Install an agent
 
-The controller can watch a USB UPS through NUT. For a CyberPower SX950U attached
-to the Pi by USB, configure NUT so this command works on the Pi:
-
-```bash
-upsc cyberpower@localhost ups.status
-```
-
-During normal power it usually includes `OL`. During a power outage it includes
-`OB`, and sometimes `LB` when the battery is low.
-
-Once NUT works, enable the controller UPS block:
-
-```bash
-sudo nano /etc/minecraft-manager/controller.toml
-```
-
-```toml
-[ups]
-enabled = true
-ups_name = "cyberpower"
-status_command = ["/usr/bin/upsc", "cyberpower@localhost", "ups.status"]
-charge_command = ["/usr/bin/upsc", "cyberpower@localhost", "battery.charge"]
-discord_status_enabled = true
-# Optional; omit this to use discord.announcement_channel_id.
-# discord_status_channel_id = 123456789012345678
-poll_interval_seconds = 15
-on_battery_delay_seconds = 30
-stop_timeout_seconds = 180
-downstream_shutdown_script = "shutdown_host"
-local_shutdown_delay_seconds = 15
-local_shutdown_command = ["/usr/bin/systemctl", "poweroff"]
-```
-
-When NUT first reports `OB` or `LB`, the controller immediately announces the
-power event in Discord. Then it waits `on_battery_delay_seconds`. If power comes
-back during that delay, it announces that shutdown was canceled. If the UPS is
-still on battery after the delay, the controller will:
-
-1. send `stop` to each configured Minecraft server;
-2. after every service on a machine stops cleanly, run its `shutdown_host`
-   script once for that machine;
-3. announce that the Pi is shutting down;
-4. run the local Pi shutdown command.
-
-Discord also gets an `/ups` slash command that shows line/battery status and
-current battery charge. `/status` posts every configured Minecraft server's
-status in the channel; only Discord administrators can run it. `/players` is
-usable by everyone and posts each active player with their current Paper
-server in the channel.
-
-### Live Discord health status
-
-After the Pi controller is updated, its Discord health display works
-automatically. Existing `controller.toml` files do not need the new lines:
-`health_presence_enabled` and `discord_status_enabled` both default to `true`,
-and the UPS status message defaults to `discord.announcement_channel_id`.
-The editable UPS message appears when `[ups].enabled = true` and a Discord
-channel is configured.
-
-The controller keeps one UPS message and edits it instead of posting a new one
-on every check. It shows:
-
-- current line-power or battery state;
-- battery percentage;
-- overall health level;
-- a summary of online, busy, offline, unreachable, and unknown servers; and
-- when the information last changed.
-
-The bot member's activity changes to **Watching Minecraft servers • All Good**,
-**Caution**, or **Attention**. The controller evaluates server health every 30
-seconds and also reacts to UPS changes:
-
-- **All Good:** every configured server is online and the UPS reports normal
-  line power (`OL`).
-- **Caution:** a server is offline or busy, the battery charge is unknown, or
-  NUT reports a warning state.
-- **Attention:** an agent/server is unreachable or reports an unknown/error
-  state, or the UPS is unavailable, on battery, or entering a shutdown state.
-
-The message ID is stored at
-`/var/lib/minecraft-manager/ups-status-card.json`. It survives controller
-restarts and program updates, so the controller resumes editing the same
-message. If that Discord message is deleted, the controller creates one
-replacement and stores its new ID.
-
-Install the Polkit rule that lets the controller service user power off the Pi:
-
-```bash
-cd ~/minecraft-server-manager
-sudo install -m 0644 deploy/polkit/minecraft-manager-controller-poweroff.rules \
-  /etc/polkit-1/rules.d/49-minecraft-manager-controller-poweroff.rules
-```
-
-## 3. Install an agent on each Ubuntu machine
-
-Run this on every Minecraft machine:
+Run these commands on each Linux machine that hosts a Minecraft server:
 
 ```bash
 sudo apt update
 sudo apt install -y git
-cd ~
 git clone https://github.com/Monkey5283/minecraft-server-manager.git
-
-sudo bash ~/minecraft-server-manager/deploy/scripts/bootstrap-minecraft-manager \
+cd minecraft-server-manager
+sudo bash deploy/scripts/bootstrap-minecraft-manager \
   agent https://github.com/Monkey5283/minecraft-server-manager.git main
 ```
 
-Configure the server:
+### Configure the agent
+
+Open the agent configuration:
 
 ```bash
 sudo nano /etc/minecraft-manager/agent.toml
+```
+
+This minimal example assumes the Minecraft server is managed by
+`minecraft@survival.service` and stored in `/srv/minecraft/survival`:
+
+```toml
+[agent]
+name = "minecraft-host"
+bind = "0.0.0.0"
+port = 8766
+token_env = "MC_AGENT_TOKEN"
+
+[[servers]]
+id = "survival"
+name = "Survival"
+working_directory = "/srv/minecraft/survival"
+timeout_seconds = 120
+
+[servers.actions]
+start = [["sudo", "-n", "/usr/bin/systemctl", "start", "minecraft@survival.service"]]
+stop = [["sudo", "-n", "/usr/bin/systemctl", "stop", "minecraft@survival.service"]]
+restart = [["sudo", "-n", "/usr/bin/systemctl", "restart", "minecraft@survival.service"]]
+status = [["/usr/bin/systemctl", "is-active", "--quiet", "minecraft@survival.service"]]
+```
+
+Change the working directory and every service name to match your Minecraft
+installation. Each command is an argument array; the agent never passes these
+values through a shell.
+
+Open the agent secret file:
+
+```bash
 sudo nano /etc/minecraft-manager/agent.env
 ```
 
-Important:
+Set `MC_AGENT_TOKEN` to the same random value used for this host in the
+controller secrets file:
 
-- The agent server `id` must match the controller server `id`.
-- `MC_AGENT_TOKEN` must equal this host's token from `controller.env`.
-- Set `working_directory` to the Minecraft server directory.
-- Change the systemd service names in `actions` if your service is not named
-  `minecraft@survival.service`. For your PaperMC service, use
-  `papermc.service`.
-- Only commands listed under `actions` and `scripts` can be executed.
-
-Install the restricted sudo rules after replacing `survival` with the correct
-server ID and replacing the service name with your real service:
-
-```bash
-cd ~/minecraft-server-manager
-sudo nano deploy/sudoers/minecraft-manager
-sudo visudo -cf deploy/sudoers/minecraft-manager
-sudo install -m 0440 deploy/sudoers/minecraft-manager \
-  /etc/sudoers.d/minecraft-manager
+```ini
+MC_AGENT_TOKEN=replace-with-the-matching-agent-token
 ```
 
-For a PaperMC service named `papermc.service`, `/etc/sudoers.d/minecraft-manager`
-should allow these commands:
+### Allow the service commands
+
+The `mcmanager` account needs permission to run only the lifecycle commands
+listed in `agent.toml`. Open a dedicated sudoers file:
+
+```bash
+sudo visudo -f /etc/sudoers.d/minecraft-manager
+```
+
+For the example service above, add:
 
 ```sudoers
-mcmanager ALL=(root) NOPASSWD: /usr/bin/systemctl start papermc.service
-mcmanager ALL=(root) NOPASSWD: /usr/bin/systemctl stop papermc.service
-mcmanager ALL=(root) NOPASSWD: /usr/bin/systemctl restart papermc.service
-mcmanager ALL=(root) NOPASSWD: /usr/local/sbin/update-papermc survival
-mcmanager ALL=(root) NOPASSWD: /usr/local/sbin/backup-minecraft survival
+mcmanager ALL=(root) NOPASSWD: /usr/bin/systemctl start minecraft@survival.service
+mcmanager ALL=(root) NOPASSWD: /usr/bin/systemctl stop minecraft@survival.service
+mcmanager ALL=(root) NOPASSWD: /usr/bin/systemctl restart minecraft@survival.service
 ```
 
-If you want UPS automation to shut down this Ubuntu machine after stopping the
-Minecraft service, add this script to `[servers.scripts]` in
-`/etc/minecraft-manager/agent.toml`:
-
-```toml
-shutdown_host = [["sudo", "-n", "/usr/sbin/shutdown", "-h", "+1", "UPS on battery; Minecraft Manager requested host shutdown"]]
-```
-
-Then install the restricted shutdown sudo rule:
+Validate the file before starting the agent:
 
 ```bash
-cd ~/minecraft-server-manager
-sudo visudo -cf deploy/sudoers/minecraft-manager-host-shutdown
-sudo install -m 0440 deploy/sudoers/minecraft-manager-host-shutdown \
-  /etc/sudoers.d/minecraft-manager-host-shutdown
+sudo chmod 0440 /etc/sudoers.d/minecraft-manager
+sudo visudo -cf /etc/sudoers.d/minecraft-manager
 ```
 
-Start the agent:
+If UFW is enabled, allow port `8766` only from the controller. Replace the
+placeholder with the controller's private address:
+
+```bash
+sudo ufw allow from CONTROLLER_PRIVATE_ADDRESS to any port 8766 proto tcp
+```
+
+Do not forward port `8766` through your router.
+
+## 4. Start and verify the services
+
+Start the agent on each Minecraft host:
 
 ```bash
 sudo systemctl restart mc-manager-agent
-sudo systemctl status mc-manager-agent
+sudo systemctl status mc-manager-agent --no-pager
 ```
 
-If UFW is enabled, allow agent connections only from the Pi:
+From the controller, confirm that the agent is reachable. Replace the hostname
+with the same value used in `agent_url`:
 
 ```bash
-sudo ufw allow from PI_LAN_IP to any port 8766 proto tcp
+curl http://minecraft-host.local:8766/v1/health
 ```
 
-### Add more servers from the dashboard
+Then start the controller:
 
-After a server is defined in an agent's
-`/etc/minecraft-manager/agent.toml`, it can be registered on the controller
-without editing `controller.toml` or restarting the Pi service:
+```bash
+sudo systemctl restart mc-manager-controller
+sudo systemctl status mc-manager-controller --no-pager
+```
 
-1. Add another `[[servers]]` block on the Ubuntu host. Give it a unique
-   lowercase `id`, its working directory, and its allowed actions.
-2. Add the optional `[servers.file_manager]` and `[servers.player_query]`
-   blocks when those features are needed.
-3. Run `sudo systemctl restart mc-manager-agent` on that host.
-4. Open **Server setup** in the dashboard, choose **Scan agents**, and select
-   **Add to dashboard**.
+The Discord bot should come online and register these commands:
 
-The controller verifies the server directly with its already trusted agent and
-reuses that agent connection internally. Agent tokens and SSH credentials are
-never sent to the browser. Dashboard registrations are saved in
-`/var/lib/minecraft-manager/managed-servers.json`, which is preserved by normal
-manager updates. Display names and player-tracking choices can be changed from
-the same screen. Removing a registration only removes it from this dashboard;
-it does not delete files, stop the server, or change `agent.toml`.
+- `/minecraft` manages one configured server.
+- `/status` reports all configured servers to Discord administrators.
+- `/players` lists players when Paper Query is configured.
+- `/instructions` publicly shows the configured server join guide.
+- `/ups` reports UPS state when UPS monitoring is configured.
 
-The first server on a completely new machine still needs one corresponding
-entry in the Pi's `controller.toml` so the controller has that machine's agent
-URL and token environment variable. After that one-time trusted connection is
-configured, additional servers on that same machine use the dashboard flow
-above.
+## 5. Open the dashboard safely
 
-### Dashboard file manager
+The default configuration listens only on `127.0.0.1:8080`. Keep it that way
+and use one of the private access methods below.
 
-The web dashboard can browse a server directory, edit UTF-8 text files, create
-files and folders, and upload or intentionally overwrite files. File access is
-disabled by default for existing configurations and must be enabled separately
-for each `[[servers]]` entry on its agent.
+### Tailscale
 
-Add this beneath the applicable server entry in
-`/etc/minecraft-manager/agent.toml`, before the next `[[servers]]` block:
+On the controller, run:
+
+```bash
+sudo setup-minecraft-manager-tailscale
+```
+
+The helper installs or configures Tailscale, enables private HTTPS with
+Tailscale Serve, and prints the dashboard address. Join the same tailnet from
+your computer or phone before opening that address.
+
+Do not enable Tailscale Funnel for this dashboard.
+
+### SSH tunnel
+
+From your computer, create a local tunnel to the controller:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 USERNAME@CONTROLLER_HOSTNAME
+```
+
+Then open `http://127.0.0.1:8080` in your browser.
+
+Do not forward dashboard port `8080` through your router.
+
+## Adding more servers
+
+To add another server on an existing agent:
+
+1. Add another `[[servers]]` block to that host's `agent.toml`.
+2. Add a matching `[[servers]]` block to `controller.toml`.
+3. Use the same `agent_url` and `token_env` for servers on the same agent.
+4. Add exact sudoers rules for the new systemd service.
+5. Restart the agent and controller.
+
+To add another host, install a new agent and give it a new random token. Never
+reuse an agent token across hosts.
+
+## Optional features
+
+The repository includes examples for more advanced installations:
+
+- [`config/agent.linux.example.toml`](config/agent.linux.example.toml) includes
+  Paper Query, file management, updates, backups, and host shutdown.
+- [`config/agent.linuxgsm.example.toml`](config/agent.linuxgsm.example.toml)
+  shows a LinuxGSM-managed server.
+- [`config/paper-update.env.example`](config/paper-update.env.example) configures
+  verified Paper jar updates.
+- [`deploy/sudoers/`](deploy/sudoers/) contains restricted sudo examples.
+- [`deploy/systemd/`](deploy/systemd/) contains service and sandbox examples.
+
+Only enable the features you need, and grant the `mcmanager` account only the
+exact commands and directories required by those features.
+
+### Dashboard file downloads
+
+File downloads use the same opt-in file-manager root as browsing, editing, and
+uploads. Add this inside each `[[servers]]` block that should expose files:
 
 ```toml
 [servers.file_manager]
@@ -316,459 +381,62 @@ max_edit_size_bytes = 2097152
 max_upload_size_bytes = 33554432
 ```
 
-Use the exact directory for that server. The agent resolves every requested
-path against this root and rejects absolute paths, `..` traversal, and symbolic
-links that leave it. The text editor accepts UTF-8 files up to 2 MiB by default;
-uploads are limited to 32 MiB. Increase the limits only when necessary.
+Restart that host's agent after changing the configuration. The dashboard's
+**Manage files** screen then shows a **Download** button beside every file.
+Downloads require an authenticated dashboard session, remain confined to the
+configured root, support binary and large files, and stream through the Pi
+instead of being loaded completely into its memory. Directories are not
+automatically archived; create a backup archive first when you need to download
+a whole world or directory.
 
-The `mcmanager` service account also needs filesystem permission. For the
-included `minecraft@.service`, which runs as `minecraft`, prepare a root under
-`/srv/minecraft` with:
+## Updating
 
-```bash
-sudo apt install -y acl
-server_root=/srv/minecraft/survival
-server_user=minecraft
-sudo setfacl -R -m "u:mcmanager:rwX,u:${server_user}:rwX" "$server_root"
-sudo find "$server_root" -type d -exec setfacl \
-  -m "d:u:mcmanager:rwx,d:u:${server_user}:rwx" {} +
-sudo systemctl restart mc-manager-agent
-```
-
-The default agent systemd sandbox already permits writes under
-`/srv/minecraft`. If a server lives under `/home`, create a narrow override so
-only its exact directory is exposed to the agent:
-
-```bash
-sudo install -d /etc/systemd/system/mc-manager-agent.service.d
-sudo cp ~/minecraft-server-manager/deploy/systemd/mc-manager-agent-home-files.conf.example \
-  /etc/systemd/system/mc-manager-agent.service.d/files.conf
-sudo nano /etc/systemd/system/mc-manager-agent.service.d/files.conf
-sudo systemctl daemon-reload
-sudo systemctl restart mc-manager-agent
-```
-
-Replace both the path in `files.conf` and `server_user` in the ACL commands with
-the real server directory and service user. Do not expose an entire home
-directory when the Minecraft files occupy only one subdirectory.
-
-After the agent restarts, refresh the dashboard. Servers with file access
-enabled show **Manage files**. Saves include a content version, so the dashboard
-refuses to overwrite a file that changed on disk after it was opened. Uploads
-require a separate overwrite confirmation when a filename already exists.
-
-### Player join, transfer, and leave messages
-
-The controller can post one Discord message for each player's network session.
-It edits that same message when the player moves between Paper servers. After
-the player has been absent from every tracked Paper server for the configured
-grace period, it edits the message one final time to show that the player left.
-A later join starts a new message, and every player is tracked independently.
-
-Tracking reads Minecraft's UDP Query player list through the agent running on
-each Paper machine. Set `track_players = true` only on Paper controller entries.
-Do not set it on the Velocity entry: Velocity is the proxy, while the Lobby and
-Vanilla Paper servers report the player's actual location.
-
-The following setup matches this network:
-
-- System 2 is `192.168.1.35` and runs Velocity plus the Lobby Paper server.
-- Lobby listens locally on `127.0.0.1:25566`.
-- Vanilla is the Paper server on `192.168.1.16:25567`.
-
-#### 1. Update the program first
-
-Run this on the Pi controller, System 2, and the Vanilla machine:
+Run this command on the controller and every agent:
 
 ```bash
 sudo update-minecraft-manager
 ```
 
-This installs the new program and systemd unit for that machine, then restarts
-its manager service. It preserves everything under `/etc/minecraft-manager`,
-so it does not add the new settings to your existing TOML files. Add them with
-the following steps.
+The updater preserves files under `/etc/minecraft-manager`, installs the latest
+configured branch, restarts the correct service, and restores the previous
+revision if the new service does not stay active.
 
-#### 2. Enable Query on both Paper servers
+## Troubleshooting
 
-On System 2, edit the Lobby properties:
-
-```bash
-sudo nano /srv/minecraft/lobby/server.properties
-```
-
-Edit the existing properties so they contain exactly one of each line:
-
-```properties
-enable-query=true
-query.port=25566
-```
-
-On the Vanilla machine, edit:
+Check service status and recent logs:
 
 ```bash
-sudo nano /home/monkeycraftvanilla/Vanilla/server.properties
-```
-
-Set:
-
-```properties
-enable-query=true
-query.port=25567
-```
-
-Query uses UDP even though players use TCP on the same numbered backend port.
-The agent queries its own Paper server, so do not add a router port-forward and
-do not open either Query port in UFW. Keep ports `25566` and `25567` private.
-
-#### 3. Tell each agent where its Paper Query endpoint is
-
-On System 2, open:
-
-```bash
-sudo nano /etc/minecraft-manager/agent.toml
-```
-
-Under the existing Lobby `[[servers]]` entry, before the next `[[servers]]`
-entry, add:
-
-```toml
-[servers.player_query]
-host = "127.0.0.1"
-port = 25566
-timeout_seconds = 3
-```
-
-Do not add a `[servers.player_query]` block to the Velocity entry.
-
-On the Vanilla machine, open the same agent configuration path and add this
-under its existing Vanilla/`survival` `[[servers]]` entry:
-
-```toml
-[servers.player_query]
-host = "192.168.1.16"
-port = 25567
-timeout_seconds = 3
-```
-
-The `host` and `port` are the Paper endpoint as reached from that same machine;
-they are not the agent URL and they are not the public Velocity address.
-
-#### 4. Enable tracking on the Pi controller
-
-Open:
-
-```bash
-sudo nano /etc/minecraft-manager/controller.toml
-```
-
-Add this top-level block before the first `[[servers]]` entry:
-
-```toml
-[player_tracking]
-enabled = true
-poll_interval_seconds = 5
-leave_grace_seconds = 10
-```
-
-It uses `[discord].announcement_channel_id` by default. To post player sessions
-in a different Discord text channel, add its ID to the block:
-
-```toml
-channel_id = 123456789012345678
-```
-
-The bot needs **View Channel** and **Send Messages** in that channel. It edits
-its own messages, so it does not need the **Manage Messages** permission.
-
-Edit the existing Lobby and Vanilla controller entries; do not create duplicate
-entries. They should include `track_players = true`:
-
-```toml
-[[servers]]
-id = "lobby"
-name = "Lobby"
-agent_url = "http://192.168.1.35:8766"
-token_env = "MC_AGENT_TOKEN_HOST2"
-track_players = true
-
-[[servers]]
-id = "survival"
-name = "Vanilla"
-agent_url = "http://192.168.1.16:8766"
-token_env = "MC_AGENT_TOKEN_HOST1"
-track_players = true
-```
-
-Leave the existing Velocity entry untracked. It must not contain
-`track_players = true`.
-
-#### 5. Restart Paper, the agents, and the controller
-
-On System 2:
-
-```bash
-sudo systemctl restart minecraft@lobby.service
-sudo systemctl restart mc-manager-agent
-sudo systemctl status minecraft@lobby.service mc-manager-agent --no-pager
-```
-
-On the Vanilla machine:
-
-```bash
-sudo systemctl restart papermc.service
-sudo systemctl restart mc-manager-agent
-sudo systemctl status papermc.service mc-manager-agent --no-pager
-```
-
-Finally, on the Pi:
-
-```bash
-sudo systemctl restart mc-manager-controller
 sudo systemctl status mc-manager-controller --no-pager
-```
-
-With the five-second poll and ten-second leave grace, joins and transfers
-normally appear within about 5 to 10 seconds. A leave is finalized after
-roughly 10 to 20 seconds. If a Query endpoint is temporarily unavailable, the
-monitor keeps the current messages instead of incorrectly declaring that players left.
-
-Active session message IDs are saved in
-`/var/lib/minecraft-manager/player-sessions.json`. The controller restores them
-after a service restart or `sudo update-minecraft-manager`, so an update can
-continue editing the same Discord messages rather than starting duplicates.
-
-### Bedrock cross-play and inventory-free server portals
-
-The managed network-plugin setup installs Geyser and Floodgate on Velocity,
-ViaVersion on both Paper backends, and the private MonkeyPortals plugin. Admins
-mark portal regions with commands; players transfer by walking through them and
-receive no selector item.
-See [docs/network-plugins.md](docs/network-plugins.md) for the exact install,
-sudo, agent, firewall, and verification steps.
-
-### LinuxGSM-managed Minecraft server
-
-For a LinuxGSM server, use the included LinuxGSM examples instead of the
-standard systemd actions. The defaults assume the LinuxGSM user and script are
-both named `mcserver`.
-
-First verify the script and tmux session:
-
-```bash
-ls -l /home/mcserver/mcserver
-sudo -u mcserver tmux list-sessions
-```
-
-Copy and customize the agent example:
-
-```bash
-sudo cp ~/minecraft-server-manager/config/agent.linuxgsm.example.toml \
-  /etc/minecraft-manager/agent.toml
-sudo nano /etc/minecraft-manager/agent.toml
-```
-
-If the LinuxGSM user, script, or tmux session is not `mcserver`, replace every
-occurrence in the file. For PaperMC, the script may be named `pmcserver`.
-
-Install the LinuxGSM systemd override. Replace `/home/mcserver` in the copied
-file first if the LinuxGSM home is different:
-
-```bash
-sudo install -d /etc/systemd/system/mc-manager-agent.service.d
-sudo cp ~/minecraft-server-manager/deploy/systemd/mc-manager-agent-linuxgsm.conf \
-  /etc/systemd/system/mc-manager-agent.service.d/linuxgsm.conf
-sudo nano /etc/systemd/system/mc-manager-agent.service.d/linuxgsm.conf
-```
-
-Install the restricted LinuxGSM sudo rules after changing names and paths to
-match the server:
-
-```bash
-cd ~/minecraft-server-manager
-sudo nano deploy/sudoers/minecraft-manager-linuxgsm
-sudo visudo -cf deploy/sudoers/minecraft-manager-linuxgsm
-sudo install -m 0440 deploy/sudoers/minecraft-manager-linuxgsm \
-  /etc/sudoers.d/minecraft-manager-linuxgsm
-sudo systemctl daemon-reload
-sudo systemctl restart mc-manager-agent
-```
-
-The controller now uses LinuxGSM for start, stop, restart, update, and backup.
-Status only checks the LinuxGSM tmux session and never invokes `monitor`, so a
-status request cannot unexpectedly restart a deliberately stopped server.
-
-## 4. Start the Pi controller
-
-Back on the Pi:
-
-```bash
-sudo systemctl restart mc-manager-controller
-sudo systemctl status mc-manager-controller
-```
-
-Discord should now provide the `/minecraft` command.
-
-If the service fails, view its logs:
-
-```bash
 sudo journalctl -u mc-manager-controller -n 100 --no-pager
-```
 
-Agent logs use:
-
-```bash
+sudo systemctl status mc-manager-agent --no-pager
 sudo journalctl -u mc-manager-agent -n 100 --no-pager
 ```
 
-## 5. Open the dashboard through Tailscale
+Common setup problems:
 
-Install Tailscale on the Pi using its official Linux installation instructions,
-then connect the Pi:
+- **Agent is unreachable:** verify `agent_url`, DNS or private addressing, and
+  the host firewall.
+- **Agent returns unauthorized:** confirm the agent token matches on both
+  machines.
+- **Start or stop fails:** make sure `agent.toml` and the sudoers file use the
+  exact systemd service name.
+- **Discord commands are missing:** confirm the bot was invited with the
+  `applications.commands` scope. Setting `guild_id` usually makes initial
+  command registration faster.
+- **Discord says access is denied:** use a Discord administrator account or add
+  the correct user or role ID to `controller.toml`.
 
-```bash
-sudo tailscale up
-sudo tailscale serve --bg localhost:8080
-```
+## Important files
 
-Tailscale prints the private HTTPS dashboard address. Only devices in your
-tailnet can reach it. Install Tailscale on your phone or computer and open that
-address.
-
-Keep the controller bound to `127.0.0.1`. Do not enable Tailscale Funnel and do
-not forward port `8080` through your router.
-
-## 6. Update this program
-
-Configuration and secrets remain in `/etc/minecraft-manager` and are not
-replaced during updates. Active player-session state and the editable UPS card
-ID under `/var/lib/minecraft-manager` are also preserved.
-
-Update any Pi or Ubuntu installation with:
-
-```bash
-sudo update-minecraft-manager
-```
-
-The updater pulls the latest `main` branch, installs dependencies, and restarts
-the correct service. If the new service fails to stay active, it restores the
-previous commit automatically.
-
-On the Pi, the live UPS card and health presence use their enabled-by-default
-settings even when the existing TOML does not contain those new options. No new
-token, secret, Discord intent, or manual configuration migration is required.
-
-## 7. Configure Minecraft jar updates
-
-The included updater can discover the newest **stable or beta** Paper build
-when you choose **Apply update** in Discord. **Alpha builds are never
-installed.** It only updates the Minecraft version you explicitly configure;
-it will not jump from one Minecraft version to another.
-
-First, update the program on the Pi controller and each Ubuntu agent:
-
-```bash
-sudo update-minecraft-manager
-```
-
-### Lobby on System 2
-
-On `192.168.1.35`, replace `/etc/minecraft/lobby-update.env` with:
-
-```ini
-UPDATE_PROVIDER=paper
-PAPER_VERSION=26.2
-SERVICE_NAME=minecraft@lobby.service
-SERVER_DIR=/srv/minecraft/lobby
-JAR_NAME=server.jar
-```
-
-Secure and check the file:
-
-```bash
-sudo chown root:root /etc/minecraft/lobby-update.env
-sudo chmod 600 /etc/minecraft/lobby-update.env
-sudo /usr/local/sbin/update-minecraft-jar lobby
-```
-
-The last command is a safe direct test. It installs the newest stable or beta
-build for `26.2`; it skips the restart when that exact build is already
-installed. It never selects an alpha build.
-
-### Vanilla Paper server
-
-On `192.168.1.16`, first confirm the directory and jar filename:
-
-```bash
-sudo systemctl show papermc.service \
-  -p WorkingDirectory -p ExecStart --no-pager
-```
-
-If it shows `/srv/minecraft/survival` and `-jar server.jar`, use
-`/etc/minecraft/survival-update.env`:
-
-```ini
-UPDATE_PROVIDER=paper
-PAPER_VERSION=26.2
-SERVICE_NAME=papermc.service
-SERVER_DIR=/srv/minecraft/survival
-JAR_NAME=server.jar
-```
-
-Then secure and test it:
-
-```bash
-sudo chown root:root /etc/minecraft/survival-update.env
-sudo chmod 600 /etc/minecraft/survival-update.env
-sudo /usr/local/sbin/update-minecraft-jar survival
-```
-
-If `ExecStart` names a different jar, put that exact filename in `JAR_NAME`.
-The server ID in the env filename and command must match the ID in the agent's
-`agent.toml`.
-
-After the direct test, use Discord's **Apply update** action normally. Its reply
-shows whether it installed a particular Paper stable or beta build or skipped
-the restart because that build was already installed.
-
-The updater uses PaperMC's official downloads service with an identifying
-User-Agent, verifies the published SHA-256 checksum and jar structure before it
-stops Minecraft, saves the old jar as `server.jar.pre-update`, and rolls back if
-the service does not remain active. Jar rollback does not undo world-format
-changes. Paper recommends making a backup and being present for an update in
-case a plugin is incompatible. Make a full backup first whenever changing
-`PAPER_VERSION`, and especially before installing a beta.
-
-Official references: [PaperMC downloads service](https://docs.papermc.io/misc/downloads-service/)
-and [updating Paper](https://docs.papermc.io/paper/updating/).
-
-### Fixed URL mode
-
-For a non-Paper server or a deliberately pinned jar, static mode remains
-available:
-
-```ini
-UPDATE_PROVIDER=static
-DOWNLOAD_URL=https://trusted-provider.example/server.jar
-SHA256=expected-64-character-sha256
-SERVICE_NAME=minecraft@SERVER_ID.service
-SERVER_DIR=/srv/minecraft/SERVER_ID
-JAR_NAME=server.jar
-```
-
-Fabric, Forge, and other server types still need a trusted fixed URL or their
-own provider-specific resolver.
-
-## Useful files
-
-| File | Purpose |
+| Path | Purpose |
 | --- | --- |
-| `/etc/minecraft-manager/controller.toml` | Pi server list and Discord permissions |
-| `/etc/minecraft-manager/controller.env` | Pi secrets |
-| `/etc/minecraft-manager/agent.toml` | Allowed actions on an Ubuntu host |
-| `/etc/minecraft-manager/agent.env` | Ubuntu agent token |
-| `/etc/minecraft-manager/update.env` | Program update source |
-| `/var/lib/minecraft-manager/ups-status-card.json` | Persisted editable UPS message ID |
+| `/etc/minecraft-manager/controller.toml` | Controller, Discord, and server settings |
+| `/etc/minecraft-manager/controller.env` | Controller secrets |
+| `/etc/minecraft-manager/agent.toml` | Agent servers and allowlisted commands |
+| `/etc/minecraft-manager/agent.env` | Agent authentication token |
+| `/etc/minecraft-manager/update.env` | Installation role and update source |
 
-Never commit files from `/etc/minecraft-manager` or paste their contents into
-Discord.
+Never commit files from `/etc/minecraft-manager`, bot tokens, passwords,
+session secrets, public addresses, private hostnames, or details of your live
+network.
