@@ -1,0 +1,467 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "usage: update-minecraft-plugins PROFILE SERVER_ID" >&2
+  echo "profiles: velocity-crossplay, lobby-network, paper-network" >&2
+  exit 2
+}
+
+[[ $EUID -eq 0 ]] || {
+  echo "run this updater as root" >&2
+  exit 1
+}
+
+[[ $# -eq 2 ]] || usage
+profile="$1"
+server_id="$2"
+[[ "$server_id" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || usage
+
+case "$profile" in
+  velocity-crossplay|lobby-network|paper-network) ;;
+  *) usage ;;
+esac
+
+settings="/etc/minecraft/${server_id}-plugins.env"
+[[ -r "$settings" ]] || {
+  echo "missing plugin settings: $settings" >&2
+  exit 1
+}
+
+# This file must be root-owned because it is sourced by a root process.
+settings_owner="$(stat --format=%U "$settings")"
+[[ "$settings_owner" == "root" ]] || {
+  echo "$settings must be owned by root" >&2
+  exit 1
+}
+settings_mode="$(stat --format=%a "$settings")"
+[[ "$settings_mode" == "600" || "$settings_mode" == "640" || "$settings_mode" == "644" ]] || {
+  echo "$settings must not be executable or writable by group/other" >&2
+  exit 1
+}
+source "$settings"
+
+: "${SERVER_DIR:?SERVER_DIR is required}"
+: "${SERVICE:?SERVICE is required}"
+: "${OWNER:?OWNER is required}"
+: "${GROUP:?GROUP is required}"
+
+server_dir="$(realpath --canonicalize-missing "$SERVER_DIR")"
+[[ "$server_dir" == /srv/minecraft/* || "$server_dir" == /home/*/* ]] || {
+  echo "SERVER_DIR must be a server below /srv/minecraft or a user's home" >&2
+  exit 2
+}
+[[ "$SERVICE" =~ ^[A-Za-z0-9][A-Za-z0-9@_.-]*\.service$ ]] || {
+  echo "SERVICE has an invalid systemd unit name" >&2
+  exit 2
+}
+[[ "$OWNER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] || {
+  echo "OWNER has an invalid account name" >&2
+  exit 2
+}
+[[ "$GROUP" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] || {
+  echo "GROUP has an invalid group name" >&2
+  exit 2
+}
+id "$OWNER" >/dev/null
+getent group "$GROUP" >/dev/null
+
+plugins_dir="${server_dir}/plugins"
+[[ -d "$plugins_dir" ]] || {
+  echo "missing plugins directory: $plugins_dir" >&2
+  exit 1
+}
+
+exec 9>"/run/lock/minecraft-plugin-update-${server_id}.lock"
+if ! flock --nonblock 9; then
+  echo "another plugin update for ${server_id} is already running" >&2
+  exit 1
+fi
+
+staging="$(mktemp --directory)"
+trap 'rm -rf "$staging"' EXIT
+
+declare -a target_names=()
+declare -a destination_paths=()
+declare -a download_urls=()
+declare -a expected_sha512=()
+declare -a expected_sha256=()
+declare -a local_sources=()
+declare -a legacy_patterns=()
+
+add_download() {
+  target_names+=("$1")
+  destination_paths+=("${5:-$1}")
+  download_urls+=("$2")
+  expected_sha512+=("${3:-}")
+  expected_sha256+=("${4:-}")
+  local_sources+=("")
+}
+
+add_local_plugin() {
+  target_names+=("$1")
+  destination_paths+=("${3:-$1}")
+  download_urls+=("")
+  expected_sha512+=("")
+  expected_sha256+=("")
+  local_sources+=("$2")
+}
+
+resolve_geyser_download() {
+  local project="$1"
+  local download_key="$2"
+  local metadata_file="${staging}/${project}.json"
+
+  curl --fail --location --silent --show-error \
+    --output "$metadata_file" \
+    -- "https://download.geysermc.org/v2/projects/${project}/versions/latest/builds/latest"
+
+  /usr/bin/python3 - "$metadata_file" "$project" "$download_key" <<'PY'
+import json
+import sys
+
+metadata_path, project, download_key = sys.argv[1:]
+with open(metadata_path, encoding="utf-8") as metadata:
+    build = json.load(metadata)
+
+download = build.get("downloads", {}).get(download_key, {})
+sha256 = download.get("sha256")
+if not sha256:
+    raise SystemExit(f"the Geyser download metadata has no {download_key} hash")
+
+print(
+    f"https://download.geysermc.org/v2/projects/{project}/versions/latest/"
+    f"builds/latest/downloads/{download_key}"
+)
+print(sha256)
+PY
+}
+
+add_geyser_download() {
+  local target="$1"
+  local project="$2"
+  local download_key="$3"
+  local -a resolved=()
+  mapfile -t resolved < <(resolve_geyser_download "$project" "$download_key")
+  [[ ${#resolved[@]} -eq 2 ]] || {
+    echo "could not resolve ${project} from Geyser" >&2
+    exit 1
+  }
+  add_download "$target" "${resolved[0]}" "" "${resolved[1]}"
+}
+
+resolve_modrinth() {
+  local project="$1"
+  local loader="$2"
+  local metadata_file="${staging}/${project}.json"
+
+  curl --fail --location --silent --show-error \
+    --header "User-Agent: minecraft-server-manager/0.1.0 (github.com/Monkey5283/minecraft-server-manager)" \
+    --output "$metadata_file" \
+    -- "https://api.modrinth.com/v2/project/${project}/version?include_changelog=false"
+
+  /usr/bin/python3 - "$metadata_file" "$loader" <<'PY'
+import json
+import sys
+
+metadata_path, required_loader = sys.argv[1:]
+with open(metadata_path, encoding="utf-8") as metadata:
+    versions = json.load(metadata)
+
+for version in versions:
+    if version.get("version_type") != "release":
+        continue
+    if version.get("status") != "listed":
+        continue
+    if required_loader not in version.get("loaders", []):
+        continue
+    files = version.get("files", [])
+    if not files:
+        continue
+    selected = next((item for item in files if item.get("primary")), files[0])
+    sha512 = selected.get("hashes", {}).get("sha512")
+    if selected.get("url") and sha512:
+        print(selected["url"])
+        print(sha512)
+        break
+else:
+    raise SystemExit(
+        f"no listed release of the Modrinth project supports {required_loader}"
+    )
+PY
+}
+
+add_modrinth_download() {
+  local target="$1"
+  local project="$2"
+  local loader="$3"
+  local -a resolved=()
+  mapfile -t resolved < <(resolve_modrinth "$project" "$loader")
+  [[ ${#resolved[@]} -eq 2 ]] || {
+    echo "could not resolve ${project} from Modrinth" >&2
+    exit 1
+  }
+  add_download "$target" "${resolved[0]}" "${resolved[1]}"
+}
+
+resolve_github_release_asset() {
+  local repository="$1"
+  local asset_name="$2"
+  local metadata_file="${staging}/github-${repository//\//-}.json"
+
+  curl --fail --location --silent --show-error \
+    --header "Accept: application/vnd.github+json" \
+    --header "X-GitHub-Api-Version: 2022-11-28" \
+    --header "User-Agent: minecraft-server-manager/0.1.0 (github.com/Monkey5283/minecraft-server-manager)" \
+    --output "$metadata_file" \
+    -- "https://api.github.com/repos/${repository}/releases/latest"
+
+  /usr/bin/python3 - "$metadata_file" "$asset_name" <<'PY'
+import json
+import sys
+
+metadata_path, required_name = sys.argv[1:]
+with open(metadata_path, encoding="utf-8") as metadata:
+    release = json.load(metadata)
+
+if release.get("draft") or release.get("prerelease"):
+    raise SystemExit("GitHub returned a draft or prerelease as the latest release")
+
+for asset in release.get("assets", []):
+    if asset.get("name") != required_name or asset.get("state") != "uploaded":
+        continue
+    digest = asset.get("digest", "")
+    url = asset.get("browser_download_url")
+    if not url or not digest.startswith("sha256:"):
+        raise SystemExit(f"the GitHub release asset {required_name} has no SHA-256 digest")
+    print(url)
+    print(digest.removeprefix("sha256:"))
+    break
+else:
+    raise SystemExit(f"the latest GitHub release has no uploaded {required_name} asset")
+PY
+}
+
+add_github_release_asset() {
+  local target="$1"
+  local repository="$2"
+  local asset_name="$3"
+  local destination="${4:-$1}"
+  local -a resolved=()
+  mapfile -t resolved < <(resolve_github_release_asset "$repository" "$asset_name")
+  [[ ${#resolved[@]} -eq 2 ]] || {
+    echo "could not resolve ${asset_name} from ${repository}" >&2
+    exit 1
+  }
+  add_download "$target" "${resolved[0]}" "" "${resolved[1]}" "$destination"
+}
+
+case "$profile" in
+  velocity-crossplay)
+    add_geyser_download "Geyser-Velocity.jar" "geyser" "velocity"
+    add_geyser_download "floodgate-velocity.jar" "floodgate" "velocity"
+    add_github_release_asset \
+      "MCXboxBroadcastExtension.jar" \
+      "MCXboxBroadcast/Broadcaster" \
+      "MCXboxBroadcastExtension.jar" \
+      "Geyser-Velocity/extensions/MCXboxBroadcastExtension.jar"
+    ;;
+  lobby-network)
+    add_modrinth_download "ViaVersion.jar" "viaversion" "paper"
+    add_modrinth_download "ViaBackwards.jar" "viabackwards" "paper"
+    add_local_plugin "MonkeyPortals.jar" \
+      "/usr/local/share/minecraft-manager/MonkeyPortals.jar"
+    add_local_plugin "MonkeyLobbyMusic.jar" \
+      "/usr/local/share/minecraft-manager/MonkeyLobbyMusic.jar"
+    legacy_patterns+=(
+      "ViaVersion-*.jar"
+      "ViaBackwards-*.jar"
+      "MonkeyLobbyMusic-*.jar"
+      "ServerSelector.jar"
+      "ServerSelector-*.jar"
+      "MonkeyPortals-*.jar"
+    )
+    ;;
+  paper-network)
+    add_modrinth_download "ViaVersion.jar" "viaversion" "paper"
+    add_modrinth_download "ViaBackwards.jar" "viabackwards" "paper"
+    add_local_plugin "MonkeyPortals.jar" \
+      "/usr/local/share/minecraft-manager/MonkeyPortals.jar"
+    legacy_patterns+=("ViaVersion-*.jar" "ViaBackwards-*.jar" "MonkeyPortals-*.jar")
+    ;;
+esac
+
+for destination in "${destination_paths[@]}"; do
+  [[ "$destination" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || {
+    echo "invalid plugin destination: $destination" >&2
+    exit 1
+  }
+  [[ "$destination" != */../* && "$destination" != ../* && "$destination" != */.. ]] || {
+    echo "plugin destination must remain below the plugins directory: $destination" >&2
+    exit 1
+  }
+done
+
+if [[ "$profile" == "velocity-crossplay" ]]; then
+  : "${MCXBOX_BROADCAST_ADDRESS:?MCXBOX_BROADCAST_ADDRESS is required for velocity-crossplay}"
+  : "${MCXBOX_BROADCAST_PORT:?MCXBOX_BROADCAST_PORT is required for velocity-crossplay}"
+  [[ "$MCXBOX_BROADCAST_ADDRESS" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]] || {
+    echo "MCXBOX_BROADCAST_ADDRESS must be a hostname or IPv4 address without a scheme" >&2
+    exit 2
+  }
+  [[ "$MCXBOX_BROADCAST_PORT" =~ ^[0-9]{1,5}$ ]] \
+    && (( MCXBOX_BROADCAST_PORT >= 1 && MCXBOX_BROADCAST_PORT <= 65535 )) || {
+    echo "MCXBOX_BROADCAST_PORT must be between 1 and 65535" >&2
+    exit 2
+  }
+fi
+
+for index in "${!target_names[@]}"; do
+  target="${staging}/${target_names[$index]}"
+  if [[ -n "${local_sources[$index]}" ]]; then
+    source_jar="${local_sources[$index]}"
+    [[ -f "$source_jar" ]] || {
+      echo "missing private plugin artifact: $source_jar" >&2
+      exit 1
+    }
+    source_owner="$(stat --format=%U "$source_jar")"
+    source_mode="$(stat --format=%a "$source_jar")"
+    group_digit="${source_mode: -2:1}"
+    other_digit="${source_mode: -1}"
+    [[ "$source_owner" == "root" ]] || {
+      echo "$source_jar must be owned by root" >&2
+      exit 1
+    }
+    if (( (group_digit & 2) != 0 || (other_digit & 2) != 0 )); then
+      echo "$source_jar must not be writable by group or other" >&2
+      exit 1
+    fi
+    echo "Staging private plugin ${target_names[$index]}..."
+    install --mode=0644 "$source_jar" "$target"
+  else
+    echo "Downloading ${target_names[$index]}..."
+    curl --fail --location --silent --show-error \
+      --header "User-Agent: minecraft-server-manager/0.1.0 (github.com/Monkey5283/minecraft-server-manager)" \
+      --output "$target" -- "${download_urls[$index]}"
+  fi
+  if [[ -n "${expected_sha512[$index]}" ]]; then
+    echo "${expected_sha512[$index]}  ${target}" | sha512sum --check -
+  fi
+  if [[ -n "${expected_sha256[$index]}" ]]; then
+    echo "${expected_sha256[$index]}  ${target}" | sha256sum --check -
+  fi
+  jar --list --file "$target" >/dev/null
+done
+
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+backup_dir="${plugins_dir}/.minecraft-manager-backups/${timestamp}"
+install --directory --owner="$OWNER" --group="$GROUP" --mode=0750 "$backup_dir"
+
+declare -a legacy_names=()
+for pattern in "${legacy_patterns[@]}"; do
+  while IFS= read -r -d '' legacy_path; do
+    legacy_name="$(basename "$legacy_path")"
+    if [[ ! " ${legacy_names[*]} " =~ [[:space:]]${legacy_name}[[:space:]] ]]; then
+      legacy_names+=("$legacy_name")
+    fi
+  done < <(find "$plugins_dir" -maxdepth 1 -type f -name "$pattern" -print0)
+done
+
+was_active=false
+if systemctl is-active --quiet "$SERVICE"; then
+  was_active=true
+  systemctl stop "$SERVICE"
+fi
+
+rollback_plugins() {
+  echo "plugin update failed; restoring the previous plugin jars" >&2
+  for index in "${!target_names[@]}"; do
+    destination="${destination_paths[$index]}"
+    rm -f -- "${plugins_dir}/${destination}"
+    if [[ -f "${backup_dir}/${destination}" ]]; then
+      if [[ "$destination" == */* ]]; then
+        install --directory --owner="$OWNER" --group="$GROUP" --mode=0750 \
+          "$(dirname "${plugins_dir}/${destination}")"
+      fi
+      install --owner="$OWNER" --group="$GROUP" --mode=0644 \
+        "${backup_dir}/${destination}" "${plugins_dir}/${destination}"
+    fi
+  done
+  for name in "${legacy_names[@]}"; do
+    if [[ -f "${backup_dir}/${name}" ]]; then
+      install --owner="$OWNER" --group="$GROUP" --mode=0644 \
+        "${backup_dir}/${name}" "${plugins_dir}/${name}"
+    fi
+  done
+  if [[ "$was_active" == true ]]; then
+    systemctl start "$SERVICE"
+  fi
+}
+trap rollback_plugins ERR
+
+for name in "${legacy_names[@]}"; do
+  install --owner="$OWNER" --group="$GROUP" --mode=0644 \
+    "${plugins_dir}/${name}" "${backup_dir}/${name}"
+  rm -f -- "${plugins_dir}/${name}"
+  echo "Retired versioned plugin JAR: ${name}"
+done
+
+for index in "${!target_names[@]}"; do
+  name="${target_names[$index]}"
+  destination="${destination_paths[$index]}"
+  if [[ "$destination" == */* ]]; then
+    install --directory --owner="$OWNER" --group="$GROUP" --mode=0750 \
+      "$(dirname "${plugins_dir}/${destination}")"
+  fi
+  if [[ -f "${plugins_dir}/${destination}" ]]; then
+    if [[ "$destination" == */* ]]; then
+      install --directory --owner="$OWNER" --group="$GROUP" --mode=0750 \
+        "$(dirname "${backup_dir}/${destination}")"
+    fi
+    install --owner="$OWNER" --group="$GROUP" --mode=0644 \
+      "${plugins_dir}/${destination}" "${backup_dir}/${destination}"
+  fi
+  install --owner="$OWNER" --group="$GROUP" --mode=0644 \
+    "${staging}/${name}" "${plugins_dir}/${destination}"
+done
+
+if [[ "$profile" == "velocity-crossplay" ]]; then
+  broadcaster_data_dir="${plugins_dir}/Geyser-Velocity/extensions/mcxboxbroadcast"
+  broadcaster_config="${broadcaster_data_dir}/config.yml"
+  install --directory --owner="$OWNER" --group="$GROUP" --mode=0750 \
+    "$broadcaster_data_dir"
+  if [[ ! -e "$broadcaster_config" ]]; then
+    broadcaster_config_staging="${staging}/mcxboxbroadcast-config.yml"
+    {
+      echo "# Managed initial endpoint for the Monkeycraft console join account."
+      echo "# MCXboxBroadcast owns the remaining defaults and authentication state."
+      echo "session:"
+      printf '  remote-address: "%s"\n' "$MCXBOX_BROADCAST_ADDRESS"
+      printf '  remote-port: "%s"\n' "$MCXBOX_BROADCAST_PORT"
+      echo "  update-interval: 30"
+      echo "friend-sync:"
+      echo "  update-interval: 60"
+      echo "  auto-follow: true"
+      echo "  auto-unfollow: true"
+      echo "  initial-invite: true"
+      echo "  expiry:"
+      echo "    enabled: true"
+      echo "    days: 15"
+      echo "    check: 1800"
+      echo "notifications:"
+      echo "  enabled: false"
+      echo "  webhook-url: \"\""
+      echo "config-version: 2"
+    } >"$broadcaster_config_staging"
+    install --owner="$OWNER" --group="$GROUP" --mode=0640 \
+      "$broadcaster_config_staging" "$broadcaster_config"
+  fi
+fi
+
+if [[ "$was_active" == true ]]; then
+  systemctl start "$SERVICE"
+  systemctl is-active --quiet "$SERVICE"
+fi
+
+trap - ERR
+echo "Updated ${profile} plugins for ${server_id}; configuration was preserved."

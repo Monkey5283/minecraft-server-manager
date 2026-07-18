@@ -1,0 +1,13 @@
+# Master playback volume, multiplied by each player's personal volume.
+volume: 0.55
+
+# A short quiet breath between the two fifteen-minute tracks.
+gap-seconds: 5
+
+# Show the title when a new track begins.
+announce-tracks: true
+
+# The station is sequential so the calm and upbeat moods alternate evenly.
+songs:
+  - songs/monkeycraft_nexus_awaits.nbs
+  - songs/monkeycraft_festival_of_the_skyways.nbs

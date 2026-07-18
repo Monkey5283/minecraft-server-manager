@@ -89,6 +89,8 @@ if [[ "$role" == "controller" ]]; then
     /etc/systemd/system/mc-manager-controller.service
   install -m 0755 "${source_dir}/deploy/scripts/update-minecraft-manager-fleet" \
     /usr/local/bin/update-minecraft-manager-fleet
+  install -m 0755 "${source_dir}/deploy/scripts/setup-minecraft-manager-tailscale" \
+    /usr/local/sbin/setup-minecraft-manager-tailscale
   if [[ ! -e "${config_dir}/fleet" ]]; then
     install -o root -g mcmanager -m 0640 \
       "${source_dir}/config/fleet.example" "${config_dir}/fleet"
@@ -109,8 +111,14 @@ else
     /etc/systemd/system/mc-manager-agent.service
   install -m 0755 "${source_dir}/deploy/scripts/update-minecraft-jar" \
     /usr/local/sbin/update-minecraft-jar
+  install -m 0755 "${source_dir}/deploy/scripts/update-minecraft-plugins" \
+    /usr/local/sbin/update-minecraft-plugins
   install -m 0755 "${source_dir}/deploy/scripts/backup-minecraft" \
     /usr/local/sbin/backup-minecraft
+  install -d -m 0755 /usr/local/share/minecraft-manager
+  install -o root -g root -m 0644 \
+    "${source_dir}/minecraft-plugins/monkey-lobby-music/dist/MonkeyLobbyMusic.jar" \
+    /usr/local/share/minecraft-manager/MonkeyLobbyMusic.jar
   service_name="mc-manager-agent.service"
 fi
 

@@ -37,6 +37,30 @@ def test_linuxgsm_override_exposes_home_and_host_tmp():
     assert "PrivateTmp=false" in override
 
 
+def test_agent_installers_include_network_plugin_updater():
+    for installer_name in ("bootstrap-minecraft-manager", "update-minecraft-manager"):
+        installer = (ROOT / "deploy/scripts" / installer_name).read_text()
+        assert "update-minecraft-plugins" in installer
+
+
+def test_controller_installers_include_tailscale_setup():
+    for installer_name in ("bootstrap-minecraft-manager", "update-minecraft-manager"):
+        installer = (ROOT / "deploy/scripts" / installer_name).read_text()
+        assert "setup-minecraft-manager-tailscale" in installer
+
+
+def test_tailscale_setup_keeps_dashboard_private_and_persistent():
+    setup = (
+        ROOT / "deploy/scripts/setup-minecraft-manager-tailscale"
+    ).read_text()
+
+    assert "controller.bind must be 127.0.0.1" in setup
+    assert 'tailscale serve --bg --yes "http://127.0.0.1:${dashboard_port}"' in setup
+    assert "tailscale serve status" in setup
+    assert "\ntailscale funnel" not in setup.lower()
+    assert "cookie_secure" in setup
+
+
 def test_dashboard_assets_include_opt_in_file_manager_controls():
     static = ROOT / "mc_manager" / "static"
     html = (static / "index.html").read_text()
@@ -49,18 +73,6 @@ def test_dashboard_assets_include_opt_in_file_manager_controls():
     assert "application/octet-stream" in javascript
 
 
-def test_dashboard_assets_include_managed_server_setup_controls():
-    static = ROOT / "mc_manager" / "static"
-    html = (static / "index.html").read_text()
-    javascript = (static / "app.js").read_text()
-
-    assert 'id="manage-servers"' in html
-    assert 'id="server-registry"' in html
-    assert "/api/server-registry/discover" in javascript
-    assert "source_server_id" in javascript
-    assert "confirm_id" in javascript
-
-
 def test_home_file_manager_override_is_narrow_and_opt_in():
     override = (
         ROOT / "deploy/systemd/mc-manager-agent-home-files.conf.example"
@@ -71,27 +83,46 @@ def test_home_file_manager_override_is_narrow_and_opt_in():
     assert "ReadWritePaths=/home\n" not in override
 
 
-def test_agent_installers_include_network_plugin_updater_and_template():
-    for installer_name in ("bootstrap-minecraft-manager", "update-minecraft-manager"):
-        installer = (ROOT / "deploy/scripts" / installer_name).read_text()
-        assert "update-minecraft-plugins" in installer
-        assert "plugin-config/server-selector.yml" in installer
-
-
 def test_plugin_updater_uses_profiles_checksums_and_transactional_rollback():
     updater = (ROOT / "deploy/scripts/update-minecraft-plugins").read_text()
 
     assert "velocity-crossplay|lobby-network|paper-network" in updater
     assert 'add_geyser_download "Geyser-Velocity.jar" "geyser"' in updater
     assert 'add_geyser_download "floodgate-velocity.jar" "floodgate"' in updater
-    assert 'add_modrinth_download "ServerSelector.jar"' in updater
+    assert '"MCXboxBroadcast/Broadcaster"' in updater
+    assert '"Geyser-Velocity/extensions/MCXboxBroadcastExtension.jar"' in updater
+    assert "resolve_github_release_asset" in updater
+    assert 'digest.startswith("sha256:")' in updater
+    assert "MCXBOX_BROADCAST_ADDRESS is required" in updater
+    assert "MCXBOX_BROADCAST_PORT is required" in updater
+    assert 'broadcaster_data_dir="${plugins_dir}/Geyser-Velocity/extensions/mcxboxbroadcast"' in updater
+    assert "if [[ ! -e \"$broadcaster_config\" ]]" in updater
+    assert 'add_local_plugin "MonkeyPortals.jar"' in updater
     assert 'add_modrinth_download "ViaVersion.jar"' in updater
     assert 'add_modrinth_download "ViaBackwards.jar"' in updater
+    assert 'add_local_plugin "MonkeyLobbyMusic.jar"' in updater
+    assert '"MonkeyLobbyMusic-*.jar"' in updater
     assert "sha512sum --check" in updater
     assert "sha256sum --check" in updater
     assert "jar --list --file" in updater
     assert "rollback_plugins" in updater
-    assert "Preserving existing ServerSelector configuration" in updater
+    assert '"ServerSelector.jar"' in updater
+    assert "must be owned by root" in updater
+    assert "must not be writable by group or other" in updater
+
+
+def test_lobby_music_playlist_is_staged_by_agent_installers():
+    for installer_name in ("bootstrap-minecraft-manager", "update-minecraft-manager"):
+        installer = (ROOT / "deploy/scripts" / installer_name).read_text()
+        assert "minecraft-plugins/monkey-lobby-music/dist/MonkeyLobbyMusic.jar" in installer
+        assert "/usr/local/share/minecraft-manager/MonkeyLobbyMusic.jar" in installer
+
+    plugin_config = (
+        ROOT / "minecraft-plugins/monkey-lobby-music/src/main/resources/config.yml"
+    ).read_text()
+    assert "monkeycraft_nexus_awaits.nbs" in plugin_config
+    assert "monkeycraft_festival_of_the_skyways.nbs" in plugin_config
+    assert "gap-seconds: 5" in plugin_config
 
 
 def test_jar_updater_supports_safe_on_demand_paper_updates():
@@ -110,10 +141,51 @@ def test_jar_updater_supports_safe_on_demand_paper_updates():
     assert updater.index('current_sha256="') < updater.index('systemctl stop "$service"')
 
 
-def test_server_selector_template_targets_the_velocity_server_ids():
-    config = (ROOT / "deploy/plugin-config/server-selector.yml").read_text()
+def test_monkey_portals_is_inventory_free_and_targets_velocity_ids():
+    resources = ROOT / "minecraft-plugins/monkey-portals/src/main/resources"
+    config = (resources / "config.yml").read_text()
+    plugin = (resources / "plugin.yml").read_text()
 
-    assert 'command: "server:lobby"' in config
-    assert 'command: "server:vanilla"' in config
-    assert "give-on-every-join: true" in config
-    assert "lock-selector-item: true" in config
+    assert "- lobby" in config
+    assert "- vanilla" in config
+    assert "mportal:" in plugin
+    assert "monkeyportals.admin" in plugin
+    assert "selector" not in config.lower()
+
+
+def test_monkey_portals_supports_an_optional_safe_arrival_spawn():
+    source = ROOT / "minecraft-plugins/monkey-portals/src/main/java/dev/monkeycraft/portals"
+    command = (source / "PortalCommand.java").read_text()
+    listener = (source / "PortalListener.java").read_text()
+    config = (
+        ROOT / "minecraft-plugins/monkey-portals/src/main/resources/config.yml"
+    ).read_text()
+
+    assert 'case "setspawn"' in command
+    assert 'case "clearspawn"' in command
+    assert "PlayerJoinEvent" in listener
+    assert "player.teleport(arrival)" in listener
+    assert "arrival-spawn:" in config
+    assert "enabled: false" in config
+
+
+def test_monkey_portals_supports_typed_local_destinations_and_legacy_files():
+    source = ROOT / "minecraft-plugins/monkey-portals/src/main/java/dev/monkeycraft/portals"
+    command = (source / "PortalCommand.java").read_text()
+    listener = (source / "PortalListener.java").read_text()
+    repository = (source / "PortalRepository.java").read_text()
+    target = (source / "PortalTarget.java").read_text()
+
+    assert "PortalTarget.Location" in command
+    assert "PortalTarget.World" in command
+    assert "PortalTarget.Portal" in command
+    assert 'case "setlocation"' in command
+    assert 'case "setworld"' in command
+    assert 'case "setportal"' in command
+    assert "player.teleport(" in listener
+    assert "destinationPortal" in listener
+    assert 'case "location"' in repository
+    assert 'case "world"' in repository
+    assert 'case "portal"' in repository
+    assert 'path + ".server"' in repository
+    assert "sealed interface PortalTarget" in target

@@ -1,0 +1,20 @@
+name: MonkeyLobbyMusic
+version: '${version}'
+main: dev.monkeycraft.lobbymusic.MonkeyLobbyMusicPlugin
+description: Synchronized server-wide fantasy music for the Monkeycraft lobby.
+api-version: '1.20'
+author: Monkeycraft
+
+commands:
+  lobbymusic:
+    description: Control the lobby music radio.
+    usage: /lobbymusic [toggle|volume <0-100>|now|skip]
+    aliases: [lmusic, radio]
+
+permissions:
+  monkeylobbymusic.use:
+    description: Hear and control personal lobby music playback.
+    default: true
+  monkeylobbymusic.skip:
+    description: Skip the current lobby song for everyone.
+    default: op
