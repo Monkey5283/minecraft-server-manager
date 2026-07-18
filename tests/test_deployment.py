@@ -100,8 +100,10 @@ def test_plugin_updater_uses_profiles_checksums_and_transactional_rollback():
     assert 'add_local_plugin "MonkeyPortals.jar"' in updater
     assert 'add_modrinth_download "ViaVersion.jar"' in updater
     assert 'add_modrinth_download "ViaBackwards.jar"' in updater
-    assert 'add_local_plugin "MonkeyLobbyMusic.jar"' in updater
+    assert 'add_local_plugin "MonkeyLobbyMusic.jar"' not in updater
+    assert '"MonkeyLobbyMusic.jar"' in updater
     assert '"MonkeyLobbyMusic-*.jar"' in updater
+    assert '/run/sudo/minecraft-plugin-update-${server_id}.lock' in updater
     assert "sha512sum --check" in updater
     assert "sha256sum --check" in updater
     assert "jar --list --file" in updater
@@ -111,18 +113,26 @@ def test_plugin_updater_uses_profiles_checksums_and_transactional_rollback():
     assert "must not be writable by group or other" in updater
 
 
-def test_lobby_music_playlist_is_staged_by_agent_installers():
+def test_lobby_music_playlist_is_embedded_in_monkey_portals():
     for installer_name in ("bootstrap-minecraft-manager", "update-minecraft-manager"):
         installer = (ROOT / "deploy/scripts" / installer_name).read_text()
-        assert "minecraft-plugins/monkey-lobby-music/dist/MonkeyLobbyMusic.jar" in installer
-        assert "/usr/local/share/minecraft-manager/MonkeyLobbyMusic.jar" in installer
+        assert "minecraft-plugins/monkey-lobby-music/dist/MonkeyLobbyMusic.jar" not in installer
+        assert "/usr/local/share/minecraft-manager/MonkeyLobbyMusic.jar" not in installer
 
     plugin_config = (
-        ROOT / "minecraft-plugins/monkey-lobby-music/src/main/resources/config.yml"
+        ROOT / "minecraft-plugins/monkey-portals/src/main/resources/config.yml"
+    ).read_text()
+    plugin_yml = (
+        ROOT / "minecraft-plugins/monkey-portals/src/main/resources/plugin.yml"
     ).read_text()
     assert "monkeycraft_nexus_awaits.nbs" in plugin_config
     assert "monkeycraft_festival_of_the_skyways.nbs" in plugin_config
     assert "gap-seconds: 5" in plugin_config
+    assert "lobbymusic:" in plugin_yml
+    assert "aliases: [lmusic, radio]" in plugin_yml
+    assert "/run/sudo/minecraft-manager-update.lock" in (
+        ROOT / "deploy/scripts/update-minecraft-manager"
+    ).read_text()
 
 
 def test_jar_updater_supports_safe_on_demand_paper_updates():

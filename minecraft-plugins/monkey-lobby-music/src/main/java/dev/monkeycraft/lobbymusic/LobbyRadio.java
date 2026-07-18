@@ -67,28 +67,28 @@ public final class LobbyRadio {
         }
     }
 
-    void skip() {
+    public void skip() {
         advanceSong();
     }
 
-    NbsSong currentSong() {
+    public NbsSong currentSong() {
         return songs.get(songIndex);
     }
 
-    void toggle(Player player) {
+    public void toggle(Player player) {
         float current = playerVolumes.getOrDefault(player.getUniqueId(), 1.0f);
         playerVolumes.put(player.getUniqueId(), current > 0 ? 0.0f : 1.0f);
     }
 
-    boolean isMuted(Player player) {
+    public boolean isMuted(Player player) {
         return playerVolumes.getOrDefault(player.getUniqueId(), 1.0f) == 0.0f;
     }
 
-    void setPlayerVolume(Player player, int percent) {
+    public void setPlayerVolume(Player player, int percent) {
         playerVolumes.put(player.getUniqueId(), Math.max(0, Math.min(100, percent)) / 100.0f);
     }
 
-    int playerVolume(Player player) {
+    public int playerVolume(Player player) {
         return Math.round(playerVolumes.getOrDefault(player.getUniqueId(), 1.0f) * 100);
     }
 

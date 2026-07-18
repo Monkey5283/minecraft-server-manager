@@ -15,7 +15,7 @@ The managed profiles install:
 | Profile | Server | Plugins |
 | --- | --- | --- |
 | `velocity-crossplay` | Velocity | Geyser-Velocity, Floodgate-Velocity, and the MCXboxBroadcast Geyser extension |
-| `lobby-network` | Lobby Paper | ViaVersion, ViaBackwards, MonkeyPortals, and MonkeyLobbyMusic |
+| `lobby-network` | Lobby Paper | ViaVersion, ViaBackwards, and MonkeyPortals with the lobby radio |
 | `paper-network` | Vanilla Paper | ViaVersion, ViaBackwards, and MonkeyPortals |
 
 Geyser, Floodgate, and MCXboxBroadcast belong on Velocity. MCXboxBroadcast
@@ -41,13 +41,12 @@ Use a current stable Velocity release before installing current Geyser builds.
 The deployed network uses Velocity 4.0.0; Geyser 2.11.0 does not start correctly
 against the older Adventure libraries bundled with Velocity 3.5.1.
 
-The Lobby profile also installs the private, dependency-free MonkeyLobbyMusic
-server radio. It
-rotates the original 15-minute `The Nexus Awaits` and `Festival of the Skyways`
-NBS tracks with a five-second pause, then repeats. The tracks use vanilla note
-block sounds and do not require a client resource pack. Players can use
-`/radio volume <0-100>` or `/radio toggle` to control their own playback, and
-operators can use `/radio skip`.
+The Lobby build of MonkeyPortals also contains the private, dependency-free
+server radio. It rotates the original 15-minute `The Nexus Awaits` and
+`Festival of the Skyways` NBS tracks with a five-second pause, then repeats.
+The tracks use vanilla note block sounds and do not require a client resource
+pack. Players can use `/radio volume <0-100>` or `/radio toggle` to control
+their own playback, and operators can use `/radio skip`.
 
 ## 1. Install the updater
 

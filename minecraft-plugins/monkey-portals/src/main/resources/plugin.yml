@@ -1,0 +1,35 @@
+name: MonkeyPortals
+version: '${version}'
+main: dev.monkeycraft.portals.MonkeyPortalsPlugin
+description: Inventory-free local and cross-server portals for the Monkeycraft network.
+api-version: '1.20'
+author: Monkeycraft
+
+commands:
+  mportal:
+    description: Create and manage local and cross-server portal regions.
+    usage: /mportal help
+    aliases: [mp, monkeyportal]
+    permission: monkeyportals.admin
+    permission-message: You do not have permission to manage portals.
+  lobbymusic:
+    description: Control the synchronized lobby music radio.
+    usage: /lobbymusic [toggle|volume <0-100>|now|skip]
+    aliases: [lmusic, radio]
+
+permissions:
+  monkeyportals.admin:
+    description: Create, remove, inspect, and reload portals.
+    default: op
+  monkeyportals.use:
+    description: Travel through configured portals.
+    default: true
+  monkeyportals.bypass:
+    description: Prevent automatic portal transfers for builders and testing.
+    default: false
+  monkeylobbymusic.use:
+    description: Hear and control personal lobby music playback.
+    default: true
+  monkeylobbymusic.skip:
+    description: Skip the current lobby song for everyone.
+    default: op

@@ -115,10 +115,6 @@ else
     /usr/local/sbin/update-minecraft-plugins
   install -m 0755 "${source_dir}/deploy/scripts/backup-minecraft" \
     /usr/local/sbin/backup-minecraft
-  install -d -m 0755 /usr/local/share/minecraft-manager
-  install -o root -g root -m 0644 \
-    "${source_dir}/minecraft-plugins/monkey-lobby-music/dist/MonkeyLobbyMusic.jar" \
-    /usr/local/share/minecraft-manager/MonkeyLobbyMusic.jar
   service_name="mc-manager-agent.service"
 fi
 

@@ -1,0 +1,48 @@
+# Velocity server ID for this Paper backend. Set this to prevent accidental
+# portals that point back to the server they are already on.
+local-server: ""
+
+# These names are offered by command tab completion. They must match the IDs in
+# Velocity's [servers] section.
+known-servers:
+  - lobby
+  - vanilla
+  - civilizations
+
+# A player must leave and re-enter a portal before it can trigger again. This
+# applies to both Velocity transfers and local Paper teleports.
+transfer-cooldown-ms: 2000
+
+# Prevents a destination spawn located inside a portal from bouncing the player
+# straight back to the previous server.
+join-grace-ms: 3000
+
+log-transfers: true
+
+# Synchronized, server-wide fantasy lobby radio. The two embedded tracks are
+# fifteen minutes each and use vanilla note-block sounds, so no resource pack
+# is required.
+lobby-radio:
+  enabled: true
+  volume: 0.55
+  gap-seconds: 5
+  announce-tracks: true
+  songs:
+    - songs/monkeycraft_nexus_awaits.nbs
+    - songs/monkeycraft_festival_of_the_skyways.nbs
+
+# When enabled, every player joining this backend appears directly at this
+# location. Set it in-game by standing in a safe spot and using
+# /mportal setspawn. Leave it disabled on backends that should preserve player
+# logout locations.
+arrival-spawn:
+  enabled: false
+  location: null
+
+messages:
+  prefix: "&8[&bMonkeyPortals&8] &r"
+  transferring: "&aSending you to &f{server}&a..."
+  teleporting: "&aTeleporting you to &f{destination}&a..."
+  destination-unavailable: "&cThe destination &f{destination}&c is unavailable."
+  same-server: "&eThat portal points to the server you are already on."
+  cooldown: "&ePlease wait a moment before using another portal."

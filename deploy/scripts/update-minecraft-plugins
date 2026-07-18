@@ -72,7 +72,7 @@ plugins_dir="${server_dir}/plugins"
   exit 1
 }
 
-exec 9>"/run/lock/minecraft-plugin-update-${server_id}.lock"
+exec 9>"/run/sudo/minecraft-plugin-update-${server_id}.lock"
 if ! flock --nonblock 9; then
   echo "another plugin update for ${server_id} is already running" >&2
   exit 1
@@ -271,11 +271,10 @@ case "$profile" in
     add_modrinth_download "ViaBackwards.jar" "viabackwards" "paper"
     add_local_plugin "MonkeyPortals.jar" \
       "/usr/local/share/minecraft-manager/MonkeyPortals.jar"
-    add_local_plugin "MonkeyLobbyMusic.jar" \
-      "/usr/local/share/minecraft-manager/MonkeyLobbyMusic.jar"
     legacy_patterns+=(
       "ViaVersion-*.jar"
       "ViaBackwards-*.jar"
+      "MonkeyLobbyMusic.jar"
       "MonkeyLobbyMusic-*.jar"
       "ServerSelector.jar"
       "ServerSelector-*.jar"
