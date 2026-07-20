@@ -423,6 +423,12 @@ server has been checked in-game. This control is intentionally unavailable for
 manual `[[servers]]` entries because the agent cannot safely infer their custom
 launch and backup layout.
 
+Dashboard-provisioned servers also show **Delete server**. Deletion requires
+typing the exact server ID and accepting a final confirmation. The agent stops
+and disables the service and creates a complete archive under
+`/srv/minecraft-backups/SERVER_ID` before removing the server directory. Servers
+defined directly in `controller.toml` remain protected from dashboard deletion.
+
 For manually managed servers:
 
 To add another server on an existing agent:

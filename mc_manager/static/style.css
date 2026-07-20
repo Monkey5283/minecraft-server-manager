@@ -55,6 +55,7 @@ button:hover { filter: brightness(1.08); transform: translateY(-1px); }
 button:disabled { cursor: wait; filter: grayscale(.6); opacity: .5; transform: none; }
 button.secondary { color: var(--text); border-color: var(--line); background: var(--panel-2); }
 button.warning { color: #160d00; border-color: var(--amber); background: var(--amber); }
+button.danger { color: #fff; border-color: #b64a4a; background: #812f2f; }
 .server-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr));

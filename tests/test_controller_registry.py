@@ -178,6 +178,76 @@ async def test_add_update_and_remove_server_without_restart(
         ] == ["velocity"]
 
 
+async def test_guarded_delete_job_removes_dashboard_registration_after_success(
+    tmp_path: Path, monkeypatch
+):
+    entries = agent_entries()
+    entries["creative"]["deletion_enabled"] = True
+    app, agents = make_app(
+        monkeypatch, tmp_path / "managed-servers.json", entries
+    )
+    agents.delete_server = AsyncMock(
+        return_value={
+            "id": "delete-job",
+            "server_id": "creative",
+            "operation": "delete_server",
+            "state": "queued",
+        }
+    )
+    agents.job = AsyncMock(
+        return_value={
+            "id": "delete-job",
+            "server_id": "creative",
+            "operation": "delete_server",
+            "state": "succeeded",
+        }
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await login(client)
+        await client.post(
+            "/api/server-registry",
+            json={
+                "server_id": "creative",
+                "source_server_id": "velocity",
+                "name": "Creative World",
+                "track_players": False,
+            },
+        )
+        dashboard = await client.get("/api/servers")
+        creative = next(
+            item for item in dashboard.json() if item["controller_id"] == "creative"
+        )
+        bad_confirmation = await client.request(
+            "DELETE",
+            "/api/servers/creative",
+            json={"confirmation": "wrong"},
+        )
+        protected_static = await client.request(
+            "DELETE",
+            "/api/servers/velocity",
+            json={"confirmation": "velocity"},
+        )
+        deletion = await client.request(
+            "DELETE",
+            "/api/servers/creative",
+            json={"confirmation": "creative"},
+        )
+        completed = await client.get(
+            "/api/servers/creative/jobs/delete-job"
+        )
+        remaining = await client.get("/api/servers")
+
+    assert creative["deletion_enabled"] is True
+    assert bad_confirmation.status_code == 400
+    assert protected_static.status_code == 409
+    assert deletion.status_code == 200
+    assert completed.json()["state"] == "succeeded"
+    assert [item["controller_id"] for item in remaining.json()] == ["velocity"]
+    agents.delete_server.assert_awaited_once()
+
+
 async def test_registered_server_survives_app_recreation(tmp_path: Path, monkeypatch):
     registry_path = tmp_path / "managed-servers.json"
     app, _agents = make_app(monkeypatch, registry_path)

@@ -105,6 +105,11 @@ async def test_agent_exposes_and_starts_managed_software_change(tmp_path: Path):
         server_id=selected.id,
         operation="change_software",
     )
+    app.state.runtime.start_delete_server_job = lambda selected, confirmation: Job(
+        id="delete-job",
+        server_id=selected.id,
+        operation="delete_server",
+    )
     transport = httpx.ASGITransport(app=app)
     headers = {"Authorization": "Bearer test-token"}
 
@@ -128,13 +133,29 @@ async def test_agent_exposes_and_starts_managed_software_change(tmp_path: Path):
                 "confirm_backup": True,
             },
         )
+        rejected_delete = await client.request(
+            "DELETE",
+            "/v1/servers/vanillaplus",
+            headers=headers,
+            json={"confirmation": "wrong"},
+        )
+        deleted = await client.request(
+            "DELETE",
+            "/v1/servers/vanillaplus",
+            headers=headers,
+            json={"confirmation": "vanillaplus"},
+        )
 
     assert listed.status_code == 200
     assert listed.json()[0]["software_change_enabled"] is True
+    assert listed.json()[0]["deletion_enabled"] is True
     assert listed.json()[0]["software"]["type"] == "paper"
     assert conflicting_action.status_code == 409
     assert changed.status_code == 200
     assert changed.json()["id"] == "change-job"
+    assert rejected_delete.status_code == 400
+    assert deleted.status_code == 200
+    assert deleted.json()["id"] == "delete-job"
 
 
 async def test_agent_exposes_authenticated_player_snapshot(tmp_path: Path, monkeypatch):

@@ -92,6 +92,10 @@ class SoftwareChangeRequest(BaseModel):
     confirm_backup: bool = False
 
 
+class DeleteServerRequest(BaseModel):
+    confirmation: str = Field(min_length=1, max_length=64)
+
+
 class ServerRegistrationRequest(BaseModel):
     server_id: str
     source_server_id: str
@@ -714,6 +718,9 @@ def create_controller_app(
                 result["controller_id"] = server.id
                 result["name"] = server.name
                 result["managed_registration"] = server.id in registry.entries
+                result["deletion_enabled"] = bool(
+                    result.get("deletion_enabled", False)
+                ) and server.id not in base_server_map
                 return result
             except AgentUnavailable as exc:
                 return {
@@ -725,6 +732,7 @@ def create_controller_app(
                     "actions": [],
                     "scripts": [],
                     "managed_registration": server.id in registry.entries,
+                    "deletion_enabled": False,
                 }
 
         return list(await asyncio.gather(*(get_status(item) for item in servers.values())))
@@ -767,6 +775,30 @@ def create_controller_app(
         try:
             return await agents.change_software(
                 find_server(server_id), payload.model_dump()
+            )
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+    @app.delete("/api/servers/{server_id}")
+    async def delete_server(
+        server_id: str,
+        payload: DeleteServerRequest,
+        request: Request,
+    ) -> dict:
+        require_login(request)
+        if server_id in base_server_map:
+            raise HTTPException(
+                status_code=409,
+                detail="Servers defined in controller.toml cannot be deleted here",
+            )
+        if not hmac.compare_digest(payload.confirmation, server_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Deletion confirmation must exactly match the server id",
+            )
+        try:
+            return await agents.delete_server(
+                find_server(server_id), payload.confirmation
             )
         except AgentUnavailable as exc:
             raise agent_file_error(exc) from exc
@@ -923,7 +955,27 @@ def create_controller_app(
     async def job(server_id: str, job_id: str, request: Request) -> dict:
         require_login(request)
         try:
-            return await agents.job(find_server(server_id), job_id)
+            remote = find_server(server_id)
+            result = await agents.job(remote, job_id)
+            if (
+                result.get("state") == "succeeded"
+                and result.get("operation") == "delete_server"
+            ):
+                async with registry_lock:
+                    if server_id in registry.entries:
+                        registry.remove(server_id)
+                    for agent in paired.agents.values():
+                        same_agent = (
+                            agent.url.rstrip("/") == remote.agent_url.rstrip("/")
+                            and hmac.compare_digest(agent.token, remote.token)
+                        )
+                        if same_agent:
+                            agent.servers = [
+                                item for item in agent.servers if item.id != server_id
+                            ]
+                            paired.put(agent)
+                    sync_runtime_servers()
+            return result
         except AgentUnavailable as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 

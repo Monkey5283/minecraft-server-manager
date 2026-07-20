@@ -519,7 +519,40 @@ function renderServer(server) {
     softwareButton.addEventListener("click", () => openSoftwareChange(server));
     actions.append(softwareButton);
   }
+  if (server.deletion_enabled) {
+    const deleteButton = document.createElement("button");
+    deleteButton.textContent = "Delete server";
+    deleteButton.className = "danger";
+    deleteButton.addEventListener("click", () => deleteServer(card, server));
+    actions.append(deleteButton);
+  }
   return card;
+}
+
+async function deleteServer(card, server) {
+  const confirmation = window.prompt(
+    `This stops ${server.name}, creates a full backup, and permanently removes the server. Type '${server.controller_id}' to continue.`
+  );
+  if (confirmation === null) return;
+  if (confirmation !== server.controller_id) {
+    showNotice("Server ID did not match. Nothing was deleted.", "error");
+    return;
+  }
+  if (!window.confirm(`Final confirmation: delete ${server.name}?`)) return;
+  setCardBusy(card, true, "Backing up and deleting server…");
+  try {
+    const job = await api(
+      `/api/servers/${encodeURIComponent(server.controller_id)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({ confirmation }),
+      }
+    );
+    await watchJob(card, server, job.id);
+  } catch (error) {
+    setCardBusy(card, false);
+    showNotice(error.message, "error");
+  }
 }
 
 async function runAction(card, server, action, scriptName = "") {

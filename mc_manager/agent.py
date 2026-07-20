@@ -71,6 +71,10 @@ class SoftwareChangeRequest(BaseModel):
     confirm_backup: bool = False
 
 
+class DeleteServerRequest(BaseModel):
+    confirmation: str = Field(min_length=1, max_length=64)
+
+
 class CommandFailed(RuntimeError):
     def __init__(self, executable: str, returncode: int, output: str):
         self.executable = executable
@@ -373,6 +377,61 @@ class AgentRuntime:
         asyncio.create_task(self.run_software_change_job(job, server, payload))
         return job
 
+    async def run_delete_server_job(
+        self, job: Job, server: AgentServer, confirmation: str
+    ) -> None:
+        async with self.provisioning_lock, self.locks[server.id]:
+            job.state = "running"
+            job.started_at = time.time()
+            command = (
+                "sudo",
+                "-n",
+                "/opt/minecraft-manager/venv/bin/mc-manager-delete-server",
+                "--request",
+                json.dumps(
+                    {"id": server.id, "confirmation": confirmation},
+                    separators=(",", ":"),
+                ),
+            )
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=os.environ.copy(),
+                )
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=7200)
+                output = stdout.decode("utf-8", errors="replace")[-MAX_OUTPUT:]
+                if process.returncode != 0:
+                    raise CommandFailed(command[2], process.returncode, output)
+                job.output = output
+                if self.config_path is None:
+                    raise RuntimeError("Agent configuration path is unavailable for reload")
+                self.replace_config(load_agent_config(self.config_path))
+                job.state = "succeeded"
+            except Exception as exc:
+                LOG.exception("Server deletion job %s failed", job.id)
+                job.error = str(exc)[-MAX_OUTPUT:]
+                job.state = "failed"
+            finally:
+                self.maintenance_servers.discard(server.id)
+                job.completed_at = time.time()
+
+    def start_delete_server_job(
+        self, server: AgentServer, confirmation: str
+    ) -> Job:
+        while len(self.jobs) >= MAX_JOBS:
+            self.jobs.popitem(last=False)
+        job = Job(
+            id=str(uuid.uuid4()),
+            server_id=server.id,
+            operation="delete_server",
+        )
+        self.jobs[job.id] = job
+        self.maintenance_servers.add(server.id)
+        asyncio.create_task(self.run_delete_server_job(job, server, confirmation))
+        return job
+
 
 def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> FastAPI:
     @asynccontextmanager
@@ -518,6 +577,34 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
             runtime.start_software_change_job(server, payload.model_dump())
         )
 
+    @app.delete(
+        "/v1/servers/{server_id}",
+        dependencies=[Depends(authenticate)],
+    )
+    async def delete_server(server_id: str, payload: DeleteServerRequest) -> dict:
+        if not runtime.config.provisioning_enabled:
+            raise HTTPException(status_code=409, detail="Agent provisioning is disabled")
+        if runtime.config_path is None:
+            raise HTTPException(status_code=409, detail="Agent cannot reload its configuration")
+        server = find_server(server_id)
+        if runtime.managed_server_record(server_id) is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Only dashboard-provisioned servers can be deleted",
+            )
+        if not hmac.compare_digest(payload.confirmation, server.id):
+            raise HTTPException(
+                status_code=400,
+                detail="Deletion confirmation must exactly match the server id",
+            )
+        if (
+            runtime.provisioning_lock.locked()
+            or runtime.server_busy(server.id)
+            or runtime.has_pending_job(server.id)
+        ):
+            raise HTTPException(status_code=409, detail="Server maintenance is in progress")
+        return asdict(runtime.start_delete_server_job(server, payload.confirmation))
+
     @app.get("/v1/servers", dependencies=[Depends(authenticate)])
     async def list_servers() -> list[dict]:
         results = []
@@ -548,6 +635,9 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
                     "console_enabled": server.console is not None,
                     "player_tracking_available": server.player_query is not None,
                     "software_change_enabled": (
+                        runtime.config.provisioning_enabled and software is not None
+                    ),
+                    "deletion_enabled": (
                         runtime.config.provisioning_enabled and software is not None
                     ),
                     "software": software,

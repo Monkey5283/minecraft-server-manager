@@ -108,6 +108,22 @@ def test_dashboard_assets_include_backup_first_per_server_software_change():
     assert "mc-manager-change-software" in project
 
 
+def test_dashboard_assets_include_guarded_server_deletion():
+    static = ROOT / "mc_manager" / "static"
+    javascript = (static / "app.js").read_text()
+    sudoers = (ROOT / "deploy/sudoers/minecraft-manager-provisioning").read_text()
+    project = (ROOT / "pyproject.toml").read_text()
+    updater = (ROOT / "deploy/scripts/update-minecraft-manager").read_text()
+
+    assert "Delete server" in javascript
+    assert "Final confirmation" in javascript
+    assert "mc-manager-delete-server --request *" in sudoers
+    assert "mc-manager-delete-server" in project
+    assert "mc-manager-delete-server" not in updater
+    assert '[[ "$SOURCE_DIR" == /opt/minecraft-manager/* ]]' in updater
+    assert "rm -rf /srv/minecraft" not in updater
+
+
 def test_dashboard_assets_include_scoped_files_and_minecraft_console():
     static = ROOT / "mc_manager" / "static"
     html = (static / "index.html").read_text()
