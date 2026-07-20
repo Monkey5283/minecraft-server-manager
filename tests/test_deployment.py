@@ -138,6 +138,12 @@ def test_agent_installer_enables_safe_dashboard_provisioning():
     assert "ReadWritePaths=-/etc/systemd/system" in unit
     assert "mc-manager-provision --request *" in sudoers
     assert "mc-manager-managed-action *" in sudoers
+    assert "install -d --owner=root --group=minecraft --mode=2770 /srv/minecraft-backups" in bootstrap
+
+
+def test_agent_updater_precreates_writable_backup_directory():
+    updater = (ROOT / "deploy/scripts/update-minecraft-manager").read_text()
+    assert "install -d --owner=root --group=minecraft --mode=2770 /srv/minecraft-backups" in updater
 
 
 def test_home_file_manager_override_is_narrow_and_opt_in():

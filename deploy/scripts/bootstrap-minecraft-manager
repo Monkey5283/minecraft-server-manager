@@ -100,6 +100,10 @@ else
     useradd --system --create-home --home-dir /srv/minecraft --shell /usr/sbin/nologin minecraft
   fi
   usermod --append --groups minecraft mcmanager
+  # This path must exist before systemd builds the agent's ProtectSystem=strict
+  # mount namespace. The optional ReadWritePaths entry cannot make a directory
+  # writable later if it was absent when the service started.
+  install -d --owner=root --group=minecraft --mode=2770 /srv/minecraft-backups
   if [[ ! -e "${config_dir}/agent.toml" ]]; then
     install -o root -g mcmanager -m 0640 \
       "${source_dir}/config/agent.onboarding.example.toml" \
