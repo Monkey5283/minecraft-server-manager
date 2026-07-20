@@ -19,6 +19,7 @@ ProtectHome=true
 ReadWritePaths=-/srv/minecraft
 ReadWritePaths=-/srv/minecraft-backups
 ReadWritePaths=-/run/sudo
+ReadWritePaths=-/etc/systemd/system
 
 [Install]
 WantedBy=multi-user.target

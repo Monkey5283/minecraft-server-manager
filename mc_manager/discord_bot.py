@@ -67,6 +67,9 @@ class MinecraftDiscordBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
         self._register_commands()
 
+    def replace_servers(self, servers) -> None:
+        self.servers = {server.id: server for server in servers}
+
     def is_allowed(self, interaction: discord.Interaction) -> bool:
         user = interaction.user
         if user.id in self.config.allowed_user_ids:
@@ -93,7 +96,7 @@ class MinecraftDiscordBot(discord.Client):
         current = current.lower()
         return [
             app_commands.Choice(name=server.name, value=server.id)
-            for server in self.config.servers
+            for server in self.servers.values()
             if current in server.name.lower() or current in server.id
         ][:25]
 
@@ -694,7 +697,7 @@ class MinecraftDiscordBot(discord.Client):
     async def _send_startup_server_status(
         self, channel: discord.abc.Messageable
     ) -> None:
-        if not self.config.servers:
+        if not self.servers:
             return
         message = await self._server_status_message()
         try:
@@ -704,16 +707,16 @@ class MinecraftDiscordBot(discord.Client):
             )
             LOG.info(
                 "Startup status announced for %s server(s)",
-                len(self.config.servers),
+                len(self.servers),
             )
         except discord.DiscordException:
             LOG.exception("Could not send the startup server status announcement")
 
     async def _server_status_message(self) -> str:
-        if not self.config.servers:
+        if not self.servers:
             return "**Minecraft server status**\nNo servers are configured."
         lines = await asyncio.gather(
-            *(self._startup_status_line(server) for server in self.config.servers)
+            *(self._startup_status_line(server) for server in self.servers.values())
         )
         message = "**Minecraft server status**\n" + "\n".join(lines)
         if len(message) > 1900:
@@ -722,7 +725,7 @@ class MinecraftDiscordBot(discord.Client):
 
     async def _players_message(self) -> str:
         tracked_servers = tuple(
-            server for server in self.config.servers if server.track_players
+            server for server in self.servers.values() if server.track_players
         )
         if not tracked_servers:
             return (

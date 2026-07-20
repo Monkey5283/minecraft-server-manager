@@ -9,11 +9,12 @@ User=minecraft
 Group=minecraft
 WorkingDirectory=/srv/minecraft/%i
 EnvironmentFile=-/etc/minecraft/%i.env
-ExecStart=/usr/bin/java -Xms${JAVA_MIN_MEMORY} -Xmx${JAVA_MAX_MEMORY} -jar server.jar nogui
+ExecStart=/usr/local/sbin/start-minecraft-server %i
 SuccessExitStatus=0 143
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=90
+UMask=0007
 
 [Install]
 WantedBy=multi-user.target

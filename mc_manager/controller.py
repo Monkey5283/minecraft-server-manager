@@ -6,6 +6,7 @@ import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
@@ -18,16 +19,26 @@ from starlette.background import BackgroundTask
 from starlette.middleware.sessions import SessionMiddleware
 
 from .client import AgentClient, AgentUnavailable
-from .config import ConfigError, ControllerConfig, RemoteServer, load_controller_config
+from .agent_registry import PairedAgent, PairedAgentStore, RegisteredServer
+from .config import ConfigError, ControllerConfig, ID_PATTERN, RemoteServer, load_controller_config
+from .discovery import DiscoveryRegistry, listen_for_agents
 from .discord_bot import MinecraftDiscordBot
 from .health import ControllerHealthMonitor
 from .player_monitor import PlayerPresenceMonitor
+from .server_registry import (
+    ManagedServer,
+    ManagedServerRegistry,
+    ServerRegistryError,
+)
 from .ups import UPSMonitor
 
 
 LOG = logging.getLogger("mc_manager.controller")
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_PROXY_UPLOAD_BYTES = 128 * 1024 * 1024
+DEFAULT_MANAGED_SERVERS_FILE = Path(
+    "/var/lib/minecraft-manager/managed-servers.json"
+)
 
 
 class LoginRequest(BaseModel):
@@ -45,8 +56,55 @@ class DirectoryCreateRequest(BaseModel):
     path: str
 
 
-def create_controller_app(config: ControllerConfig) -> FastAPI:
+class PairAgentRequest(BaseModel):
+    agent_id: str
+    token: str
+
+
+class ProvisionServerRequest(BaseModel):
+    id: str
+    name: str
+    type: str
+    version: str
+    port: int = 25565
+    minimum_memory: str = "1G"
+    maximum_memory: str = "4G"
+    java_path: str = "/usr/bin/java"
+    accept_eula: bool = False
+
+
+class ServerRegistrationRequest(BaseModel):
+    server_id: str
+    source_server_id: str
+    name: str
+    track_players: bool = False
+
+
+class ServerRegistrationUpdate(BaseModel):
+    name: str
+    track_players: bool = False
+
+
+class ServerRemovalRequest(BaseModel):
+    confirm_id: str
+
+
+def create_controller_app(
+    config: ControllerConfig,
+    *,
+    managed_servers_file: Path | None = None,
+) -> FastAPI:
+    base_servers = config.servers
+    base_server_map = {server.id: server for server in base_servers}
+    registry_path = managed_servers_file or Path(
+        os.getenv("MC_MANAGED_SERVERS_FILE", DEFAULT_MANAGED_SERVERS_FILE)
+    )
+    registry = ManagedServerRegistry(registry_path, base_servers)
+    registry.load()
+    config = replace(config, servers=base_servers + registry.materialized())
     agents = AgentClient()
+    discovery = DiscoveryRegistry()
+    paired = PairedAgentStore(config.agent_registry_file)
     bot = MinecraftDiscordBot(
         config,
         agents,
@@ -55,6 +113,79 @@ def create_controller_app(config: ControllerConfig) -> FastAPI:
         ),
     )
     servers = {server.id: server for server in config.servers}
+    dynamic_owner: dict[str, str] = {}
+    registry_lock = asyncio.Lock()
+    player_monitor_holder: list[PlayerPresenceMonitor | None] = [None]
+
+    def sync_runtime_servers() -> None:
+        runtime_servers = list(base_servers + registry.materialized())
+        reserved_ids = {server.id for server in runtime_servers}
+        dynamic_owner.clear()
+        for paired_agent in paired.agents.values():
+            for item in paired_agent.servers:
+                if item.id in reserved_ids or item.id in dynamic_owner:
+                    continue
+                runtime_servers.append(
+                    RemoteServer(
+                        id=item.id,
+                        name=item.name,
+                        agent_url=paired_agent.url,
+                        token=paired_agent.token,
+                        track_players=item.track_players,
+                    )
+                )
+                dynamic_owner[item.id] = paired_agent.id
+        object.__setattr__(config, "servers", tuple(runtime_servers))
+        servers.clear()
+        servers.update((server.id, server) for server in runtime_servers)
+        if hasattr(bot, "replace_servers"):
+            bot.replace_servers(runtime_servers)
+        if player_monitor_holder[0] is not None:
+            player_monitor_holder[0].set_servers(tuple(runtime_servers))
+
+    def remote_for_agent(agent: PairedAgent) -> RemoteServer:
+        return RemoteServer(
+            id=agent.id,
+            name=agent.name,
+            agent_url=agent.url,
+            token=agent.token,
+        )
+
+    def sync_paired_agent(agent: PairedAgent, info: dict | None = None) -> None:
+        if info is not None:
+            raw_servers = info.get("servers", [])
+            if not isinstance(raw_servers, list):
+                raise HTTPException(status_code=502, detail="Agent returned invalid servers")
+            refreshed: list[RegisteredServer] = []
+            for raw in raw_servers:
+                server_id = str(raw.get("id", "")) if isinstance(raw, dict) else ""
+                if not ID_PATTERN.fullmatch(server_id):
+                    raise HTTPException(
+                        status_code=502, detail="Agent returned an invalid server id"
+                    )
+                owner = dynamic_owner.get(server_id)
+                if server_id in servers and owner not in {None, agent.id}:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Server id is already used: {server_id}",
+                    )
+                if server_id in servers and owner is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Server id conflicts with controller.toml: {server_id}",
+                    )
+                refreshed.append(
+                    RegisteredServer(
+                        id=server_id,
+                        name=str(raw.get("name", server_id)),
+                        track_players=bool(raw.get("track_players", False)),
+                    )
+                )
+            agent.servers = refreshed
+
+        sync_runtime_servers()
+
+    sync_runtime_servers()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -120,21 +251,29 @@ def create_controller_app(config: ControllerConfig) -> FastAPI:
             if config.player_tracking.enabled
             else None
         )
+        player_monitor_holder[0] = player_monitor
         player_task = (
             asyncio.create_task(player_monitor.run())
             if player_monitor is not None
+            else None
+        )
+        discovery_task = (
+            asyncio.create_task(listen_for_agents(discovery, config.discovery_port))
+            if config.discovery_enabled
             else None
         )
         app.state.bot_task = bot_task
         app.state.health_task = health_task
         app.state.ups_task = ups_task
         app.state.player_task = player_task
+        app.state.player_monitor = player_monitor
+        app.state.discovery_task = discovery_task
         try:
             yield
         finally:
             background_tasks = tuple(
                 task
-                for task in (health_task, ups_task, player_task)
+                for task in (health_task, ups_task, player_task, discovery_task)
                 if task is not None
             )
             for task in background_tasks:
@@ -161,6 +300,16 @@ def create_controller_app(config: ControllerConfig) -> FastAPI:
         max_age=12 * 60 * 60,
     )
 
+    @app.middleware("http")
+    async def prevent_stale_dashboard_assets(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    app.state.discovery = discovery
+    app.state.paired_agents = paired
+
     def require_login(request: Request) -> None:
         if request.session.get("authenticated") is not True:
             raise HTTPException(
@@ -172,6 +321,38 @@ def create_controller_app(config: ControllerConfig) -> FastAPI:
         if not server:
             raise HTTPException(status_code=404, detail="Unknown server")
         return server
+
+    def registry_error(exc: ServerRegistryError) -> HTTPException:
+        error_status = (
+            status.HTTP_500_INTERNAL_SERVER_ERROR
+            if str(exc).startswith("Could not save")
+            else status.HTTP_400_BAD_REQUEST
+        )
+        return HTTPException(status_code=error_status, detail=str(exc))
+
+    def unique_agent_sources() -> tuple[RemoteServer, ...]:
+        unique: dict[tuple[str, str], RemoteServer] = {}
+        for server in base_servers:
+            unique.setdefault((server.agent_url, server.token), server)
+        return tuple(unique.values())
+
+    async def confirm_agent_server(
+        source_server_id: str, server_id: str
+    ) -> tuple[RemoteServer, dict]:
+        source = base_server_map.get(source_server_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="Unknown credential source")
+        try:
+            entries = await agents.statuses(source)
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        entry = entries.get(server_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail="That server is not configured on the selected agent",
+            )
+        return source, entry
 
     def agent_file_error(exc: AgentUnavailable) -> HTTPException:
         allowed_statuses = {400, 403, 404, 409, 413, 415}
@@ -204,6 +385,249 @@ def create_controller_app(config: ControllerConfig) -> FastAPI:
         request.session.clear()
         return {"ok": True}
 
+    @app.get("/api/server-registry")
+    async def server_registry(request: Request) -> dict:
+        require_login(request)
+        managed_ids = set(registry.entries)
+        return {
+            "configured": [
+                {
+                    "id": server.id,
+                    "name": server.name,
+                    "track_players": server.track_players,
+                    "managed": server.id in managed_ids,
+                    "source_server_id": (
+                        registry.entries[server.id].source_server_id
+                        if server.id in managed_ids
+                        else server.id
+                    ),
+                }
+                for server in base_servers + registry.materialized()
+            ]
+        }
+
+    @app.get("/api/server-registry/discover")
+    async def discover_servers(request: Request) -> dict:
+        require_login(request)
+        sources = unique_agent_sources()
+        results = await asyncio.gather(
+            *(agents.statuses(source) for source in sources),
+            return_exceptions=True,
+        )
+        candidates: list[dict] = []
+        unavailable: list[dict] = []
+        registered_ids = set(servers)
+        discovered_ids: set[str] = set()
+        for source, result in zip(sources, results, strict=True):
+            if isinstance(result, BaseException):
+                unavailable.append(
+                    {"source_server_id": source.id, "detail": str(result)}
+                )
+                continue
+            for server_id, entry in result.items():
+                if server_id in registered_ids or server_id in discovered_ids:
+                    continue
+                discovered_ids.add(server_id)
+                candidates.append(
+                    {
+                        "id": server_id,
+                        "name": str(entry.get("name") or server_id),
+                        "state": str(entry.get("state") or "unknown"),
+                        "files_enabled": bool(entry.get("files_enabled", False)),
+                        "player_tracking_available": bool(
+                            entry.get("player_tracking_available", False)
+                        ),
+                        "source_server_id": source.id,
+                        "source_name": source.name,
+                    }
+                )
+        candidates.sort(key=lambda item: (item["name"].casefold(), item["id"]))
+        return {"candidates": candidates, "unavailable": unavailable}
+
+    @app.post("/api/server-registry")
+    async def register_server(
+        payload: ServerRegistrationRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        async with registry_lock:
+            if payload.server_id in servers:
+                raise HTTPException(status_code=409, detail="Server is already registered")
+            _source, agent_entry = await confirm_agent_server(
+                payload.source_server_id, payload.server_id
+            )
+            if payload.track_players and not agent_entry.get(
+                "player_tracking_available", False
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Player tracking is not configured on that agent server",
+                )
+            try:
+                server = registry.add(
+                    ManagedServer(
+                        id=payload.server_id,
+                        name=payload.name,
+                        source_server_id=payload.source_server_id,
+                        track_players=payload.track_players,
+                    )
+                )
+            except ServerRegistryError as exc:
+                raise registry_error(exc) from exc
+            sync_runtime_servers()
+        return {"ok": True, "id": server.id, "name": server.name}
+
+    @app.put("/api/server-registry/{server_id}")
+    async def update_registered_server(
+        server_id: str, payload: ServerRegistrationUpdate, request: Request
+    ) -> dict:
+        require_login(request)
+        async with registry_lock:
+            current = registry.entries.get(server_id)
+            if current is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Servers from controller.toml cannot be edited here",
+                )
+            if payload.track_players and not current.track_players:
+                _source, agent_entry = await confirm_agent_server(
+                    current.source_server_id, server_id
+                )
+                if not agent_entry.get("player_tracking_available", False):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Player tracking is not configured on that agent server",
+                    )
+            try:
+                server = registry.update(
+                    server_id,
+                    name=payload.name,
+                    track_players=payload.track_players,
+                )
+            except ServerRegistryError as exc:
+                raise registry_error(exc) from exc
+            sync_runtime_servers()
+        return {"ok": True, "id": server.id, "name": server.name}
+
+    @app.post("/api/server-registry/{server_id}/remove")
+    async def remove_registered_server(
+        server_id: str, payload: ServerRemovalRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        if not hmac.compare_digest(payload.confirm_id, server_id):
+            raise HTTPException(status_code=400, detail="Server id confirmation did not match")
+        async with registry_lock:
+            try:
+                registry.remove(server_id)
+            except ServerRegistryError as exc:
+                raise registry_error(exc) from exc
+            sync_runtime_servers()
+        return {"ok": True, "id": server_id}
+
+    @app.get("/api/agents/discovered")
+    async def discovered_agents(request: Request) -> list[dict]:
+        require_login(request)
+        return [
+            {
+                **agent.as_public_dict(),
+                "paired": agent.id in paired.agents,
+            }
+            for agent in discovery.list()
+        ]
+
+    @app.get("/api/agents")
+    async def paired_agents(request: Request) -> list[dict]:
+        require_login(request)
+        return [
+            {
+                "id": agent.id,
+                "name": agent.name,
+                "url": agent.url,
+                "servers": [
+                    {
+                        "id": server.id,
+                        "name": server.name,
+                        "track_players": server.track_players,
+                    }
+                    for server in agent.servers
+                ],
+            }
+            for agent in paired.agents.values()
+        ]
+
+    @app.post("/api/agents/pair")
+    async def pair_agent(payload: PairAgentRequest, request: Request) -> dict:
+        require_login(request)
+        discovered = discovery.get(payload.agent_id)
+        if discovered is None:
+            raise HTTPException(status_code=404, detail="Agent is no longer visible on the LAN")
+        candidate = PairedAgent(
+            id=payload.agent_id,
+            name=discovered.name,
+            url=discovered.url,
+            token=payload.token.strip(),
+        )
+        if not candidate.token:
+            raise HTTPException(status_code=400, detail="Agent token is required")
+        try:
+            info = await agents.info(remote_for_agent(candidate))
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if str(info.get("id")) != candidate.id:
+            raise HTTPException(status_code=409, detail="Agent identity changed during pairing")
+        candidate.name = str(info.get("name", candidate.name))
+        sync_paired_agent(candidate, info)
+        paired.put(candidate)
+        sync_runtime_servers()
+        return {"ok": True, "id": candidate.id, "name": candidate.name}
+
+    def find_agent(agent_id: str) -> PairedAgent:
+        agent = paired.get(agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Unknown or unpaired agent")
+        return agent
+
+    @app.get("/api/agents/{agent_id}/catalog/{server_type}")
+    async def agent_catalog(agent_id: str, server_type: str, request: Request) -> dict:
+        require_login(request)
+        try:
+            return await agents.catalog(remote_for_agent(find_agent(agent_id)), server_type)
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/api/agents/{agent_id}/servers")
+    async def provision_server(
+        agent_id: str,
+        payload: ProvisionServerRequest,
+        request: Request,
+    ) -> dict:
+        require_login(request)
+        if payload.id in servers:
+            raise HTTPException(status_code=409, detail="Server id is already configured")
+        try:
+            return await agents.provision(
+                remote_for_agent(find_agent(agent_id)), payload.model_dump()
+            )
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/agents/{agent_id}/jobs/{job_id}")
+    async def provisioning_job(
+        agent_id: str,
+        job_id: str,
+        request: Request,
+    ) -> dict:
+        require_login(request)
+        agent = find_agent(agent_id)
+        try:
+            result = await agents.job(remote_for_agent(agent), job_id)
+            if result.get("state") == "succeeded":
+                info = await agents.info(remote_for_agent(agent))
+                sync_paired_agent(agent, info)
+                paired.put(agent)
+            return result
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
     @app.get("/api/servers")
     async def list_servers(request: Request) -> list[dict]:
         require_login(request)
@@ -213,6 +637,7 @@ def create_controller_app(config: ControllerConfig) -> FastAPI:
                 result = await agents.status(server)
                 result["controller_id"] = server.id
                 result["name"] = server.name
+                result["managed_registration"] = server.id in registry.entries
                 return result
             except AgentUnavailable as exc:
                 return {
@@ -223,9 +648,10 @@ def create_controller_app(config: ControllerConfig) -> FastAPI:
                     "detail": str(exc),
                     "actions": [],
                     "scripts": [],
+                    "managed_registration": server.id in registry.entries,
                 }
 
-        return list(await asyncio.gather(*(get_status(item) for item in config.servers)))
+        return list(await asyncio.gather(*(get_status(item) for item in servers.values())))
 
     @app.post("/api/servers/{server_id}/actions/{action}")
     async def action(server_id: str, action: str, request: Request) -> dict:

@@ -77,12 +77,35 @@ if [[ "$ROLE" == "controller" ]]; then
   install -m 0755 "$SOURCE_DIR/deploy/scripts/setup-minecraft-manager-tailscale" \
     /usr/local/sbin/setup-minecraft-manager-tailscale
 else
+  if ! getent passwd minecraft >/dev/null; then
+    useradd --system --create-home --home-dir /srv/minecraft --shell /usr/sbin/nologin minecraft
+  fi
+  usermod --append --groups minecraft mcmanager
+  agent_config="/etc/minecraft-manager/agent.toml"
+  if ! grep -q '^\[discovery\]$' "$agent_config"; then
+    agent_name="$(hostname --short)"
+    [[ "$agent_name" =~ ^[A-Za-z0-9._-]+$ ]] || agent_name="minecraft-host"
+    printf '\n[discovery]\nenabled = true\nport = 8765\ninstance_id = "%s"\n' \
+      "$agent_name" >>"$agent_config"
+  fi
+  if ! grep -q '^\[provisioning\]$' "$agent_config"; then
+    printf '\n[provisioning]\nenabled = true\nmanaged_servers_file = "/srv/minecraft/.manager/managed-servers.json"\n' \
+      >>"$agent_config"
+  fi
   install -m 0755 "$SOURCE_DIR/deploy/scripts/update-minecraft-jar" \
     /usr/local/sbin/update-minecraft-jar
   install -m 0755 "$SOURCE_DIR/deploy/scripts/update-minecraft-plugins" \
     /usr/local/sbin/update-minecraft-plugins
   install -m 0755 "$SOURCE_DIR/deploy/scripts/backup-minecraft" \
     /usr/local/sbin/backup-minecraft
+  install -m 0755 "$SOURCE_DIR/deploy/scripts/start-minecraft-server" \
+    /usr/local/sbin/start-minecraft-server
+  install -m 0644 "$SOURCE_DIR/deploy/systemd/minecraft@.service" \
+    /etc/systemd/system/minecraft@.service
+  install -o root -g root -m 0440 \
+    "$SOURCE_DIR/deploy/sudoers/minecraft-manager-provisioning" \
+    /etc/sudoers.d/minecraft-manager-provisioning
+  visudo -cf /etc/sudoers.d/minecraft-manager-provisioning
 fi
 
 systemctl daemon-reload

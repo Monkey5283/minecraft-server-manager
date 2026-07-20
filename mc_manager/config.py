@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import os
 import re
+import json
+import socket
 import tomllib
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -101,6 +103,11 @@ class AgentConfig:
     port: int
     token: str
     servers: tuple[AgentServer, ...]
+    instance_id: str = ""
+    discovery_enabled: bool = True
+    discovery_port: int = 8765
+    provisioning_enabled: bool = False
+    managed_servers_file: Path = Path("/srv/minecraft/.manager/managed-servers.json")
 
 
 @dataclass(frozen=True)
@@ -155,6 +162,9 @@ class ControllerConfig:
     player_tracking: PlayerTrackingConfig = field(default_factory=PlayerTrackingConfig)
     health_presence_enabled: bool = True
     health_poll_interval_seconds: float = 30.0
+    discovery_enabled: bool = True
+    discovery_port: int = 8765
+    agent_registry_file: Path = Path("/var/lib/minecraft-manager/paired-agents.json")
 
 
 def load_agent_config(path: str | Path) -> AgentConfig:
@@ -162,9 +172,45 @@ def load_agent_config(path: str | Path) -> AgentConfig:
     agent = data.get("agent", {})
     token = _required_env(str(agent.get("token_env", "MC_AGENT_TOKEN")))
 
+    provisioning = data.get("provisioning", {})
+    discovery = data.get("discovery", {})
+    managed_servers_file = Path(
+        str(
+            provisioning.get(
+                "managed_servers_file",
+                "/srv/minecraft/.manager/managed-servers.json",
+            )
+        )
+    )
+    if (
+        "managed_servers_file" in provisioning
+        and not managed_servers_file.is_absolute()
+        and not PurePosixPath(str(managed_servers_file)).is_absolute()
+    ):
+        raise ConfigError("provisioning.managed_servers_file must be an absolute path")
+
+    raw_servers = list(data.get("servers", []))
+    if managed_servers_file.exists():
+        try:
+            managed_payload = json.loads(managed_servers_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ConfigError(
+                f"Invalid managed server registry {managed_servers_file}: {exc}"
+            ) from exc
+        managed_entries = (
+            managed_payload.get("servers", [])
+            if isinstance(managed_payload, dict)
+            else None
+        )
+        if not isinstance(managed_entries, list):
+            raise ConfigError(
+                f"Invalid managed server registry {managed_servers_file}: servers must be a list"
+            )
+        raw_servers.extend(managed_entries)
+
     servers: list[AgentServer] = []
     seen: set[str] = set()
-    for raw in data.get("servers", []):
+    for raw in raw_servers:
         server_id = _validate_id(str(raw.get("id", "")), "Agent server id")
         if server_id in seen:
             raise ConfigError(f"Duplicate agent server id: {server_id}")
@@ -272,14 +318,25 @@ def load_agent_config(path: str | Path) -> AgentConfig:
                 file_manager=file_manager,
             )
         )
-    if not servers:
+    provisioning_enabled = bool(provisioning.get("enabled", False))
+    if not servers and not provisioning_enabled:
         raise ConfigError("At least one [[servers]] entry is required")
+    discovery_port = int(discovery.get("port", 8765))
+    if not 1 <= discovery_port <= 65535:
+        raise ConfigError("discovery.port must be between 1 and 65535")
     return AgentConfig(
         name=str(agent.get("name", "minecraft-host")),
         bind=str(agent.get("bind", "0.0.0.0")),
         port=int(agent.get("port", 8766)),
         token=token,
         servers=tuple(servers),
+        instance_id=str(
+            discovery.get("instance_id", agent.get("name", socket.gethostname()))
+        ),
+        discovery_enabled=bool(discovery.get("enabled", True)),
+        discovery_port=discovery_port,
+        provisioning_enabled=provisioning_enabled,
+        managed_servers_file=managed_servers_file,
     )
 
 
@@ -290,6 +347,7 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
     discord = data.get("discord", {})
     ups = data.get("ups", {})
     player_tracking = data.get("player_tracking", {})
+    discovery = data.get("discovery", {})
 
     servers: list[RemoteServer] = []
     seen: set[str] = set()
@@ -310,8 +368,9 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
                 track_players=bool(raw.get("track_players", False)),
             )
         )
-    if not servers:
-        raise ConfigError("At least one [[servers]] entry is required")
+    discovery_port = int(discovery.get("port", 8765))
+    if not 1 <= discovery_port <= 65535:
+        raise ConfigError("discovery.port must be between 1 and 65535")
 
     guild_id = int(discord.get("guild_id", 0)) or None
     announcement_channel_id = int(discord.get("announcement_channel_id", 0)) or None
@@ -403,5 +462,15 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
         health_presence_enabled=bool(discord.get("health_presence_enabled", True)),
         health_poll_interval_seconds=max(
             10.0, float(discord.get("health_poll_interval_seconds", 30))
+        ),
+        discovery_enabled=bool(discovery.get("enabled", True)),
+        discovery_port=discovery_port,
+        agent_registry_file=Path(
+            str(
+                discovery.get(
+                    "agent_registry_file",
+                    "/var/lib/minecraft-manager/paired-agents.json",
+                )
+            )
         ),
     )

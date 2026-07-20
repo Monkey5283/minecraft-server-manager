@@ -25,6 +25,19 @@ const editorContent = document.querySelector("#editor-content");
 const editorStatus = document.querySelector("#editor-status");
 const closeEditorButton = document.querySelector("#close-editor");
 const saveFileButton = document.querySelector("#save-file");
+const openSetupButton = document.querySelector("#open-setup");
+const setupPanel = document.querySelector("#setup-panel");
+const closeSetupButton = document.querySelector("#close-setup");
+const setupNotice = document.querySelector("#setup-notice");
+const discoveredAgentsNode = document.querySelector("#discovered-agents");
+const scanAgentsButton = document.querySelector("#scan-agents");
+const provisionForm = document.querySelector("#provision-form");
+const provisionAgent = document.querySelector("#provision-agent");
+const serverType = document.querySelector("#server-type");
+const serverVersion = document.querySelector("#server-version");
+const serverVersionOptions = document.querySelector("#server-version-options");
+const loadVersionsButton = document.querySelector("#load-versions");
+const provisionJob = document.querySelector("#provision-job");
 
 let activeFileServer = null;
 let currentDirectory = "";
@@ -60,16 +73,180 @@ function showLogin() {
   loginPanel.hidden = false;
   dashboard.hidden = true;
   fileManager.hidden = true;
+  setupPanel.hidden = true;
   refreshButton.hidden = true;
   logoutButton.hidden = true;
+  openSetupButton.hidden = true;
 }
 
 function showDashboard() {
   loginPanel.hidden = true;
   dashboard.hidden = false;
   fileManager.hidden = true;
+  setupPanel.hidden = true;
   refreshButton.hidden = false;
   logoutButton.hidden = false;
+  openSetupButton.hidden = false;
+}
+
+function showSetupNotice(message, kind = "info") {
+  setupNotice.textContent = message;
+  setupNotice.className = `notice ${kind}`;
+  setupNotice.hidden = false;
+  window.setTimeout(() => (setupNotice.hidden = true), 8000);
+}
+
+async function openSetup() {
+  dashboard.hidden = true;
+  fileManager.hidden = true;
+  setupPanel.hidden = false;
+  refreshButton.hidden = true;
+  openSetupButton.hidden = true;
+  await loadAgents();
+}
+
+async function loadAgents() {
+  scanAgentsButton.disabled = true;
+  try {
+    const [discovered, paired] = await Promise.all([
+      api("/api/agents/discovered"),
+      api("/api/agents"),
+    ]);
+    renderDiscoveredAgents(discovered);
+    const previous = provisionAgent.value;
+    provisionAgent.replaceChildren(
+      new Option(paired.length ? "Choose an agent" : "Pair an agent first", "")
+    );
+    for (const agent of paired) {
+      provisionAgent.add(new Option(`${agent.name} (${agent.url})`, agent.id));
+    }
+    if ([...provisionAgent.options].some((option) => option.value === previous)) {
+      provisionAgent.value = previous;
+    }
+  } catch (error) {
+    showSetupNotice(error.message, "error");
+  } finally {
+    scanAgentsButton.disabled = false;
+  }
+}
+
+function renderDiscoveredAgents(discovered) {
+  discoveredAgentsNode.replaceChildren();
+  if (!discovered.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No agents seen yet. Confirm the agent service is running and UDP 8765 is allowed on the LAN.";
+    discoveredAgentsNode.append(empty);
+    return;
+  }
+  for (const agent of discovered) {
+    const row = document.createElement("div");
+    row.className = "agent-row";
+    const identity = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = agent.name;
+    const address = document.createElement("span");
+    address.textContent = agent.url;
+    identity.append(title, address);
+    row.append(identity);
+    if (agent.paired) {
+      const paired = document.createElement("span");
+      paired.className = "state";
+      paired.dataset.state = "online";
+      paired.textContent = "Paired";
+      row.append(paired);
+    } else {
+      const token = document.createElement("input");
+      token.type = "password";
+      token.placeholder = "Agent token";
+      token.autocomplete = "off";
+      token.setAttribute("aria-label", `Token for ${agent.name}`);
+      const button = document.createElement("button");
+      button.textContent = "Pair";
+      button.addEventListener("click", async () => {
+        if (!token.value.trim()) {
+          showSetupNotice("Paste the token from the agent first.", "error");
+          return;
+        }
+        button.disabled = true;
+        try {
+          await api("/api/agents/pair", {
+            method: "POST",
+            body: JSON.stringify({ agent_id: agent.id, token: token.value.trim() }),
+          });
+          token.value = "";
+          showSetupNotice(`Paired ${agent.name}.`, "success");
+          await loadAgents();
+        } catch (error) {
+          showSetupNotice(error.message, "error");
+        } finally {
+          button.disabled = false;
+        }
+      });
+      const controls = document.createElement("div");
+      controls.className = "pair-controls";
+      controls.append(token, button);
+      row.append(controls);
+    }
+    discoveredAgentsNode.append(row);
+  }
+}
+
+async function loadVersions() {
+  const agentId = provisionAgent.value;
+  if (!agentId) {
+    showSetupNotice("Choose a paired agent first.", "error");
+    return;
+  }
+  loadVersionsButton.disabled = true;
+  serverVersion.value = "";
+  serverVersion.placeholder = "Loading publisher catalogâ€¦";
+  serverVersionOptions.replaceChildren();
+  try {
+    const catalog = await api(
+      `/api/agents/${encodeURIComponent(agentId)}/catalog/${encodeURIComponent(serverType.value)}`
+    );
+    serverVersion.placeholder = "Choose or enter a version";
+    for (const version of catalog.versions) {
+      const option = document.createElement("option");
+      option.value = version.id;
+      option.label = version.label;
+      serverVersionOptions.append(option);
+    }
+  } catch (error) {
+    serverVersion.placeholder = "Enter an exact version";
+    showSetupNotice(error.message, "error");
+  } finally {
+    loadVersionsButton.disabled = false;
+  }
+}
+
+async function watchProvisionJob(agentId, jobId) {
+  provisionJob.hidden = false;
+  provisionForm.querySelectorAll("button, input, select").forEach((node) => (node.disabled = true));
+  try {
+    for (;;) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+      const job = await api(
+        `/api/agents/${encodeURIComponent(agentId)}/jobs/${encodeURIComponent(jobId)}`
+      );
+      provisionJob.querySelector(".job-text").textContent = `Installation: ${job.state}`;
+      if (job.state === "succeeded") {
+        showSetupNotice("Server installed. It is now available on the dashboard.", "success");
+        provisionForm.reset();
+        serverVersion.value = "";
+        serverVersionOptions.replaceChildren();
+        await loadAgents();
+        return;
+      }
+      if (job.state === "failed") throw new Error(job.error || "Installation failed");
+    }
+  } catch (error) {
+    showSetupNotice(error.message, "error");
+  } finally {
+    provisionJob.hidden = true;
+    provisionForm.querySelectorAll("button, input, select").forEach((node) => (node.disabled = false));
+  }
 }
 
 function showNotice(message, kind = "info") {
@@ -237,6 +414,7 @@ async function openFileManager(server) {
   loginPanel.hidden = true;
   fileManager.hidden = false;
   refreshButton.hidden = true;
+  openSetupButton.hidden = true;
   await loadDirectory("");
 }
 
@@ -483,6 +661,47 @@ async function uploadSelectedFile() {
     uploadButton.disabled = false;
   }
 }
+
+provisionForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const agentId = provisionAgent.value;
+  if (!agentId || !serverVersion.value) {
+    showSetupNotice("Choose an agent and load a server version.", "error");
+    return;
+  }
+  const payload = {
+    id: document.querySelector("#new-server-id").value,
+    name: document.querySelector("#new-server-name").value,
+    type: serverType.value,
+    version: serverVersion.value,
+    port: Number(document.querySelector("#new-server-port").value),
+    java_path: document.querySelector("#java-path").value,
+    minimum_memory: document.querySelector("#minimum-memory").value.toUpperCase(),
+    maximum_memory: document.querySelector("#maximum-memory").value.toUpperCase(),
+    accept_eula: document.querySelector("#accept-eula").checked,
+  };
+  try {
+    const job = await api(`/api/agents/${encodeURIComponent(agentId)}/servers`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    await watchProvisionJob(agentId, job.id);
+  } catch (error) {
+    showSetupNotice(error.message, "error");
+  }
+});
+
+openSetupButton.addEventListener("click", openSetup);
+closeSetupButton.addEventListener("click", async () => {
+  showDashboard();
+  await loadServers();
+});
+scanAgentsButton.addEventListener("click", loadAgents);
+loadVersionsButton.addEventListener("click", loadVersions);
+serverType.addEventListener("change", () => {
+  serverVersion.value = "";
+  serverVersionOptions.replaceChildren();
+});
 
 closeFilesButton.addEventListener("click", leaveFileManager);
 newFileButton.addEventListener("click", beginNewFile);

@@ -75,6 +75,35 @@ def test_dashboard_assets_include_opt_in_file_manager_controls():
     assert 'downloadButton.textContent = "Download"' in javascript
 
 
+def test_dashboard_assets_include_lan_onboarding_and_provisioning():
+    static = ROOT / "mc_manager" / "static"
+    html = (static / "index.html").read_text()
+    javascript = (static / "app.js").read_text()
+
+    assert 'id="open-setup"' in html
+    assert 'id="discovered-agents"' in html
+    for server_type in ("paper", "vanilla", "forge", "neoforge"):
+        assert f'value="{server_type}"' in html
+    assert "/api/agents/discovered" in javascript
+    assert "/api/agents/pair" in javascript
+    assert "/catalog/" in javascript
+
+
+def test_agent_installer_enables_safe_dashboard_provisioning():
+    bootstrap = (ROOT / "deploy/scripts/bootstrap-minecraft-manager").read_text()
+    unit = (ROOT / "deploy/systemd/mc-manager-agent.service").read_text()
+    sudoers = (ROOT / "deploy/sudoers/minecraft-manager-provisioning").read_text()
+
+    assert "agent.onboarding.example.toml" in bootstrap
+    assert "secrets.token_hex(32)" in bootstrap
+    assert "default-jre-headless" in bootstrap
+    assert "minecraft@.service" in bootstrap
+    assert "start-minecraft-server" in bootstrap
+    assert "ReadWritePaths=-/etc/systemd/system" in unit
+    assert "mc-manager-provision --request *" in sudoers
+    assert "mc-manager-managed-action *" in sudoers
+
+
 def test_home_file_manager_override_is_narrow_and_opt_in():
     override = (
         ROOT / "deploy/systemd/mc-manager-agent-home-files.conf.example"

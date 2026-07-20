@@ -13,6 +13,11 @@ The manager has two parts:
 The controller and agents are intended for a trusted LAN, VPN, or private
 overlay network. Do not expose their ports directly to the internet.
 
+LAN discovery advertises only the agent id, display name, and HTTP port over
+UDP `8765`; it never broadcasts the agent token. Pairing still requires the
+random token generated on that host. Discovery works inside one broadcast
+domain. Routed VLANs require a UDP relay or manual TOML configuration.
+
 ## Features
 
 - Start, stop, restart, update, and check Minecraft servers
@@ -21,6 +26,8 @@ overlay network. Do not expose their ports directly to the internet.
 - Use a password-protected web dashboard
 - Optionally browse, edit, upload, and download server files from the dashboard
 - Optionally track Paper players and server transfers
+- Discover newly installed agents automatically on the local network
+- Pair agents and install Vanilla, Paper, Forge, or NeoForge from the dashboard
 - Optionally monitor a UPS and perform an orderly shutdown
 - Run only allowlisted agent commands without a shell
 
@@ -196,7 +203,52 @@ sudo bash deploy/scripts/bootstrap-minecraft-manager \
   agent https://github.com/Monkey5283/minecraft-server-manager.git main
 ```
 
+The installer creates a random agent token, uses the machine hostname as its
+discovery identity, installs a Java runtime, and enables dashboard
+provisioning. It does not install or start a Minecraft server by itself.
+
+Start the agent and retrieve its pairing token:
+
+```bash
+sudo systemctl restart mc-manager-agent
+sudo systemctl status mc-manager-agent --no-pager
+sudo sed -n 's/^MC_AGENT_TOKEN=//p' /etc/minecraft-manager/agent.env
+```
+
+In the dashboard, select **Add server**, pair the discovered host, then choose
+Paper, Vanilla, Forge, or NeoForge and a publisher-provided version. The wizard
+creates a dedicated directory below `/srv/minecraft`, a `minecraft@.service`
+instance, file management, player Query, backups, and safe lifecycle controls.
+Downloads are checksum-verified and the agent never exposes a general shell.
+
+The Minecraft EULA must be accepted explicitly in the wizard. Forge and
+NeoForge versions also require a compatible Java runtime. The default is
+`/usr/bin/java`; the wizard accepts another installed Java executable for older
+loaders.
+
 ### Configure the agent
+
+Dashboard provisioning is the recommended setup for new hosts. Its generated
+configuration enables discovery and stores provisioned definitions separately:
+
+```toml
+[agent]
+name = "minecraft-hostname"
+bind = "0.0.0.0"
+port = 8766
+token_env = "MC_AGENT_TOKEN"
+
+[discovery]
+enabled = true
+port = 8765
+instance_id = "minecraft-hostname"
+
+[provisioning]
+enabled = true
+managed_servers_file = "/srv/minecraft/.manager/managed-servers.json"
+```
+
+The manual configuration below remains supported for existing servers.
 
 Open the agent configuration:
 
@@ -275,6 +327,12 @@ placeholder with the controller's private address:
 sudo ufw allow from CONTROLLER_PRIVATE_ADDRESS to any port 8766 proto tcp
 ```
 
+On the controller, allow discovery from the local subnet when UFW is enabled:
+
+```bash
+sudo ufw allow from LAN_SUBNET to any port 8765 proto udp
+```
+
 Do not forward port `8766` through your router.
 
 ## 4. Start and verify the services
@@ -340,6 +398,12 @@ Then open `http://127.0.0.1:8080` in your browser.
 Do not forward dashboard port `8080` through your router.
 
 ## Adding more servers
+
+For provisioned agents, click **Add server** in the dashboard and select an
+already-paired host. Each installation needs a globally unique server id and
+appears in the panel as soon as its installation job completes.
+
+For manually managed servers:
 
 To add another server on an existing agent:
 

@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+import json
+from unittest.mock import Mock
+
+from mc_manager.server_catalog import (
+    FORGE_METADATA,
+    MOJANG_MANIFEST,
+    PAPER_PROJECT,
+    list_versions,
+)
+
+
+def opener_for(payloads: dict[str, bytes]):
+    def open_request(request, timeout=20):
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.side_effect = lambda size=-1: payloads[request.full_url][:size]
+        return response
+
+    return open_request
+
+
+def test_catalog_lists_official_vanilla_releases_only() -> None:
+    payload = json.dumps(
+        {
+            "versions": [
+                {"id": "26.2", "type": "release"},
+                {"id": "26.2-pre1", "type": "snapshot"},
+                {"id": "1.21.11", "type": "release"},
+            ]
+        }
+    ).encode()
+
+    versions = list_versions("vanilla", opener=opener_for({MOJANG_MANIFEST: payload}))
+
+    assert [version.id for version in versions] == ["26.2", "1.21.11"]
+
+
+def test_catalog_flattens_paper_version_groups() -> None:
+    payload = json.dumps({"versions": {"26": ["26.2", "26.1"], "1.21": ["1.21.11"]}}).encode()
+
+    versions = list_versions("paper", opener=opener_for({PAPER_PROJECT: payload}))
+
+    assert [version.id for version in versions] == ["26.2", "26.1", "1.21.11"]
+
+
+def test_catalog_lists_forge_maven_versions_newest_first() -> None:
+    payload = b"""<metadata><versioning><versions>
+      <version>1.20.1-47.4.0</version><version>1.21.1-52.0.1</version>
+    </versions></versioning></metadata>"""
+
+    versions = list_versions("forge", opener=opener_for({FORGE_METADATA: payload}))
+
+    assert [version.id for version in versions] == ["1.21.1-52.0.1", "1.20.1-47.4.0"]
+    assert versions[0].minecraft_version == "1.21.1"

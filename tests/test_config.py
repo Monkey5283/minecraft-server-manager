@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,45 @@ backup = [["backup-tool", "survival"]]
     loaded = load_agent_config(config)
     assert loaded.servers[0].actions["start"] == (("service", "start"),)
     assert loaded.servers[0].scripts["backup"] == (("backup-tool", "survival"),)
+
+
+def test_agent_allows_empty_onboarding_config_and_loads_managed_servers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("TEST_AGENT_TOKEN", "secret")
+    managed = tmp_path / "managed.json"
+    managed.write_text(
+        json.dumps(
+            {
+                "servers": [
+                    {
+                        "id": "paper",
+                        "working_directory": str(tmp_path / "paper"),
+                        "actions": {
+                            "start": ["service", "start"],
+                            "stop": ["service", "stop"],
+                            "restart": ["service", "restart"],
+                            "status": ["service", "status"],
+                        },
+                    }
+                ]
+            }
+        )
+    )
+    config = tmp_path / "agent.toml"
+    config.write_text(
+        f'''[agent]
+token_env = "TEST_AGENT_TOKEN"
+[provisioning]
+enabled = true
+managed_servers_file = {str(managed)!r}
+'''
+    )
+
+    loaded = load_agent_config(config)
+
+    assert loaded.provisioning_enabled is True
+    assert loaded.servers[0].id == "paper"
 
 
 def test_agent_loads_opt_in_file_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

@@ -58,6 +58,29 @@ class AgentClient:
             return entries[server.id]
         raise AgentUnavailable(f"{server.name}: server is not configured on its agent")
 
+    async def info(self, server: RemoteServer) -> dict:
+        result = await self._request(server, "GET", "/v1/info")
+        if not isinstance(result, dict) or not isinstance(result.get("servers"), list):
+            raise AgentUnavailable(f"{server.name}: agent returned invalid identity data")
+        return result
+
+    async def catalog(self, server: RemoteServer, server_type: str) -> dict:
+        result = await self._request(server, "GET", f"/v1/catalog/{server_type}")
+        if not isinstance(result, dict) or not isinstance(result.get("versions"), list):
+            raise AgentUnavailable(f"{server.name}: agent returned an invalid version list")
+        return result
+
+    async def provision(self, server: RemoteServer, payload: dict) -> dict:
+        result = await self._request(
+            server,
+            "POST",
+            "/v1/provision",
+            json_body=payload,
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("id"), str):
+            raise AgentUnavailable(f"{server.name}: agent returned an invalid install job")
+        return result
+
     async def statuses(self, server: RemoteServer) -> dict[str, dict]:
         entries = await self._request(server, "GET", "/v1/servers")
         if not isinstance(entries, list):

@@ -59,15 +59,13 @@ fi
 sudo -u mcmanager "${venv_dir}/bin/python" -m pip install --upgrade pip
 sudo -u mcmanager "${venv_dir}/bin/python" -m pip install --upgrade "$source_dir"
 
-if [[ ! -e "${config_dir}/update.env" ]]; then
-  {
-    printf 'ROLE=%q\n' "$role"
-    printf 'REPOSITORY_URL=%q\n' "$repository_url"
-    printf 'BRANCH=%q\n' "$branch"
-    printf 'SOURCE_DIR=%q\n' "$source_dir"
-    printf 'VENV_DIR=%q\n' "$venv_dir"
-  } >"${config_dir}/update.env"
-fi
+{
+  printf 'ROLE=%q\n' "$role"
+  printf 'REPOSITORY_URL=%q\n' "$repository_url"
+  printf 'BRANCH=%q\n' "$branch"
+  printf 'SOURCE_DIR=%q\n' "$source_dir"
+  printf 'VENV_DIR=%q\n' "$venv_dir"
+} >"${config_dir}/update.env"
 chown root:root "${config_dir}/update.env"
 chmod 0600 "${config_dir}/update.env"
 
@@ -97,15 +95,38 @@ if [[ "$role" == "controller" ]]; then
   fi
   service_name="mc-manager-controller.service"
 else
+  apt-get install --yes default-jre-headless
+  if ! getent passwd minecraft >/dev/null; then
+    useradd --system --create-home --home-dir /srv/minecraft --shell /usr/sbin/nologin minecraft
+  fi
+  usermod --append --groups minecraft mcmanager
   if [[ ! -e "${config_dir}/agent.toml" ]]; then
     install -o root -g mcmanager -m 0640 \
-      "${source_dir}/config/agent.linux.example.toml" \
+      "${source_dir}/config/agent.onboarding.example.toml" \
       "${config_dir}/agent.toml"
+    agent_name="$(hostname --short)"
+    if [[ "$agent_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      sed -i \
+        -e "s/^name = \"minecraft-host\"/name = \"${agent_name}\"/" \
+        -e "s/^instance_id = \"minecraft-host\"/instance_id = \"${agent_name}\"/" \
+        "${config_dir}/agent.toml"
+    fi
   fi
   if [[ ! -e "${config_dir}/agent.env" ]]; then
-    install -o root -g mcmanager -m 0640 \
-      "${source_dir}/config/agent.env.example" \
-      "${config_dir}/agent.env"
+    agent_token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    printf 'MC_AGENT_TOKEN=%s\n' "$agent_token" >"${config_dir}/agent.env"
+    chown root:mcmanager "${config_dir}/agent.env"
+    chmod 0640 "${config_dir}/agent.env"
+  fi
+  if ! grep -q '^\[discovery\]$' "${config_dir}/agent.toml"; then
+    agent_name="$(hostname --short)"
+    [[ "$agent_name" =~ ^[A-Za-z0-9._-]+$ ]] || agent_name="minecraft-host"
+    printf '\n[discovery]\nenabled = true\nport = 8765\ninstance_id = "%s"\n' \
+      "$agent_name" >>"${config_dir}/agent.toml"
+  fi
+  if ! grep -q '^\[provisioning\]$' "${config_dir}/agent.toml"; then
+    printf '\n[provisioning]\nenabled = true\nmanaged_servers_file = "/srv/minecraft/.manager/managed-servers.json"\n' \
+      >>"${config_dir}/agent.toml"
   fi
   install -m 0644 "${source_dir}/deploy/systemd/mc-manager-agent.service" \
     /etc/systemd/system/mc-manager-agent.service
@@ -115,6 +136,14 @@ else
     /usr/local/sbin/update-minecraft-plugins
   install -m 0755 "${source_dir}/deploy/scripts/backup-minecraft" \
     /usr/local/sbin/backup-minecraft
+  install -m 0755 "${source_dir}/deploy/scripts/start-minecraft-server" \
+    /usr/local/sbin/start-minecraft-server
+  install -m 0644 "${source_dir}/deploy/systemd/minecraft@.service" \
+    /etc/systemd/system/minecraft@.service
+  install -o root -g root -m 0440 \
+    "${source_dir}/deploy/sudoers/minecraft-manager-provisioning" \
+    /etc/sudoers.d/minecraft-manager-provisioning
+  visudo -cf /etc/sudoers.d/minecraft-manager-provisioning
   service_name="mc-manager-agent.service"
 fi
 
@@ -125,3 +154,7 @@ echo
 echo "Installed ${role} files. Existing configuration was not overwritten."
 echo "Edit the files in ${config_dir}, then start with:"
 echo "  sudo systemctl restart ${service_name}"
+if [[ "$role" == "agent" ]]; then
+  echo "Pair this agent from the controller dashboard with the token shown by:"
+  echo "  sudo sed -n 's/^MC_AGENT_TOKEN=//p' ${config_dir}/agent.env"
+fi

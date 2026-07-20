@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# -eq 1 && "$1" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || {
+  echo "usage: start-minecraft-server SERVER_ID" >&2
+  exit 2
+}
+
+server_id="$1"
+server_dir="/srv/minecraft/${server_id}"
+cd "$server_dir"
+
+if [[ -x ./start-server ]]; then
+  exec ./start-server
+fi
+
+# Backward-compatible path for servers created before dashboard provisioning.
+exec /usr/bin/java \
+  -Xms"${JAVA_MIN_MEMORY:-1G}" \
+  -Xmx"${JAVA_MAX_MEMORY:-4G}" \
+  -jar server.jar nogui

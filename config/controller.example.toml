@@ -3,6 +3,11 @@
 bind = "127.0.0.1"
 port = 8080
 
+[discovery]
+enabled = true
+port = 8765
+agent_registry_file = "/var/lib/minecraft-manager/paired-agents.json"
+
 [auth]
 web_username = "admin"
 web_password_env = "MC_WEB_PASSWORD"
