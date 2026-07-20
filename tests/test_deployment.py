@@ -86,6 +86,9 @@ def test_dashboard_assets_include_lan_onboarding_and_provisioning():
         assert f'value="{server_type}"' in html
     assert "/api/agents/discovered" in javascript
     assert "/api/agents/pair" in javascript
+    assert "/api/agents/configured" in javascript
+    assert "/api/agents/adopt" in javascript
+    assert "Already configured agents" in html
     assert "/catalog/" in javascript
 
 

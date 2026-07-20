@@ -50,6 +50,7 @@ const setupPanel = document.querySelector("#setup-panel");
 const closeSetupButton = document.querySelector("#close-setup");
 const setupNotice = document.querySelector("#setup-notice");
 const discoveredAgentsNode = document.querySelector("#discovered-agents");
+const configuredAgentsNode = document.querySelector("#configured-agents");
 const scanAgentsButton = document.querySelector("#scan-agents");
 const provisionForm = document.querySelector("#provision-form");
 const provisionAgent = document.querySelector("#provision-agent");
@@ -142,11 +143,13 @@ async function openSetup() {
 async function loadAgents() {
   scanAgentsButton.disabled = true;
   try {
-    const [discovered, paired] = await Promise.all([
+    const [discovered, configured, paired] = await Promise.all([
       api("/api/agents/discovered"),
+      api("/api/agents/configured"),
       api("/api/agents"),
     ]);
     renderDiscoveredAgents(discovered);
+    renderConfiguredAgents(configured);
     const previous = provisionAgent.value;
     provisionAgent.replaceChildren(
       new Option(paired.length ? "Choose an agent" : "Pair an agent first", "")
@@ -161,6 +164,55 @@ async function loadAgents() {
     showSetupNotice(error.message, "error");
   } finally {
     scanAgentsButton.disabled = false;
+  }
+}
+
+function renderConfiguredAgents(configured) {
+  configuredAgentsNode.replaceChildren();
+  if (!configured.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No controller-configured agents are available.";
+    configuredAgentsNode.append(empty);
+    return;
+  }
+  for (const agent of configured) {
+    const row = document.createElement("div");
+    row.className = "agent-row";
+    const identity = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = agent.name;
+    const address = document.createElement("span");
+    address.textContent = agent.url;
+    identity.append(title, address);
+    row.append(identity);
+    if (agent.paired) {
+      const paired = document.createElement("span");
+      paired.className = "state";
+      paired.dataset.state = "online";
+      paired.textContent = "Enabled";
+      row.append(paired);
+    } else {
+      const button = document.createElement("button");
+      button.textContent = "Enable installs";
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          const result = await api("/api/agents/adopt", {
+            method: "POST",
+            body: JSON.stringify({ source_server_id: agent.source_server_id }),
+          });
+          showSetupNotice(`Enabled installs on ${result.name}.`, "success");
+          await loadAgents();
+        } catch (error) {
+          showSetupNotice(error.message, "error");
+        } finally {
+          button.disabled = false;
+        }
+      });
+      row.append(button);
+    }
+    configuredAgentsNode.append(row);
   }
 }
 

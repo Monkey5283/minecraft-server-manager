@@ -172,6 +172,9 @@
               <p class="muted">Agents on this LAN appear automatically. Retrieve an agent's token with <code>sudo sed -n 's/^MC_AGENT_TOKEN=//p' /etc/minecraft-manager/agent.env</code>.</p>
               <div id="discovered-agents" class="agent-list"></div>
               <button id="scan-agents" class="secondary">Scan again</button>
+              <h4>Already configured agents</h4>
+              <p class="muted">Hosts already trusted by the controller can be enabled for installs without entering their token again.</p>
+              <div id="configured-agents" class="agent-list"></div>
             </section>
             <section class="panel setup-step">
               <p class="eyebrow">STEP 2</p>

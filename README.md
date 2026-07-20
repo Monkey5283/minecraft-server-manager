@@ -404,6 +404,11 @@ For provisioned agents, click **Add server** in the dashboard and select an
 already-paired host. Each installation needs a globally unique server id and
 appears in the panel as soon as its installation job completes.
 
+If LAN broadcasts are blocked but the controller already has a server from that
+agent in `controller.toml`, use **Already configured agents → Enable installs**.
+The controller verifies the agent with its existing URL and token, so the token
+does not need to be entered in the browser again.
+
 Dashboard-provisioned servers also show **Change software/version** on their
 server card. The workflow supports Vanilla, Paper, Forge, and NeoForge. It
 downloads and verifies the selected release before downtime, stops the server,
