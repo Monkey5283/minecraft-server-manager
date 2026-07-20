@@ -81,6 +81,9 @@ else
     useradd --system --create-home --home-dir /srv/minecraft --shell /usr/sbin/nologin minecraft
   fi
   usermod --append --groups minecraft mcmanager
+  # Ensure the backup path exists before restarting the sandboxed agent.
+  # ReadWritePaths cannot expose a path that did not exist at namespace setup.
+  install -d --owner=root --group=minecraft --mode=2770 /srv/minecraft-backups
   agent_config="/etc/minecraft-manager/agent.toml"
   if ! grep -q '^\[discovery\]$' "$agent_config"; then
     agent_name="$(hostname --short)"
