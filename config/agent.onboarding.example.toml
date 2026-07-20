@@ -1,0 +1,18 @@
+[agent]
+name = "minecraft-host"
+bind = "0.0.0.0"
+port = 8766
+token_env = "MC_AGENT_TOKEN"
+
+[discovery]
+enabled = true
+port = 8765
+# Give every host a stable, unique id. A hostname is a good choice.
+instance_id = "minecraft-host"
+
+[provisioning]
+enabled = true
+managed_servers_file = "/srv/minecraft/.manager/managed-servers.json"
+
+# Servers installed from the web panel are stored in managed_servers_file.
+# Hand-written [[servers]] entries can still be added to this file if desired.

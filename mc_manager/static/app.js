@@ -25,12 +25,37 @@ const editorContent = document.querySelector("#editor-content");
 const editorStatus = document.querySelector("#editor-status");
 const closeEditorButton = document.querySelector("#close-editor");
 const saveFileButton = document.querySelector("#save-file");
+const saveAndRestartButton = document.querySelector("#save-and-restart");
+const restartFromFilesButton = document.querySelector("#restart-from-files");
+const consolePanel = document.querySelector("#console-panel");
+const consoleServerName = document.querySelector("#console-server-name");
+const consoleNotice = document.querySelector("#console-notice");
+const consoleOutput = document.querySelector("#console-output");
+const consoleForm = document.querySelector("#console-form");
+const consoleCommand = document.querySelector("#console-command");
+const closeConsoleButton = document.querySelector("#close-console");
+const openSetupButton = document.querySelector("#open-setup");
+const setupPanel = document.querySelector("#setup-panel");
+const closeSetupButton = document.querySelector("#close-setup");
+const setupNotice = document.querySelector("#setup-notice");
+const discoveredAgentsNode = document.querySelector("#discovered-agents");
+const scanAgentsButton = document.querySelector("#scan-agents");
+const provisionForm = document.querySelector("#provision-form");
+const provisionAgent = document.querySelector("#provision-agent");
+const serverType = document.querySelector("#server-type");
+const serverVersion = document.querySelector("#server-version");
+const serverVersionOptions = document.querySelector("#server-version-options");
+const loadVersionsButton = document.querySelector("#load-versions");
+const provisionJob = document.querySelector("#provision-job");
 
 let activeFileServer = null;
 let currentDirectory = "";
 let currentFileEntries = [];
 let currentFileLimits = { max_edit_size_bytes: 0, max_upload_size_bytes: 0 };
 let openDocument = null;
+let activeConsoleServer = null;
+let consoleCursor = 0;
+let consolePollGeneration = 0;
 
 const actionLabels = {
   start: "Start",
@@ -57,19 +82,189 @@ async function api(path, options = {}) {
 }
 
 function showLogin() {
+  stopConsolePolling();
   loginPanel.hidden = false;
   dashboard.hidden = true;
   fileManager.hidden = true;
+  consolePanel.hidden = true;
+  setupPanel.hidden = true;
   refreshButton.hidden = true;
   logoutButton.hidden = true;
+  openSetupButton.hidden = true;
 }
 
 function showDashboard() {
+  stopConsolePolling();
   loginPanel.hidden = true;
   dashboard.hidden = false;
   fileManager.hidden = true;
+  consolePanel.hidden = true;
+  setupPanel.hidden = true;
   refreshButton.hidden = false;
   logoutButton.hidden = false;
+  openSetupButton.hidden = false;
+}
+
+function showSetupNotice(message, kind = "info") {
+  setupNotice.textContent = message;
+  setupNotice.className = `notice ${kind}`;
+  setupNotice.hidden = false;
+  window.setTimeout(() => (setupNotice.hidden = true), 8000);
+}
+
+async function openSetup() {
+  stopConsolePolling();
+  dashboard.hidden = true;
+  fileManager.hidden = true;
+  consolePanel.hidden = true;
+  setupPanel.hidden = false;
+  refreshButton.hidden = true;
+  openSetupButton.hidden = true;
+  await loadAgents();
+}
+
+async function loadAgents() {
+  scanAgentsButton.disabled = true;
+  try {
+    const [discovered, paired] = await Promise.all([
+      api("/api/agents/discovered"),
+      api("/api/agents"),
+    ]);
+    renderDiscoveredAgents(discovered);
+    const previous = provisionAgent.value;
+    provisionAgent.replaceChildren(
+      new Option(paired.length ? "Choose an agent" : "Pair an agent first", "")
+    );
+    for (const agent of paired) {
+      provisionAgent.add(new Option(`${agent.name} (${agent.url})`, agent.id));
+    }
+    if ([...provisionAgent.options].some((option) => option.value === previous)) {
+      provisionAgent.value = previous;
+    }
+  } catch (error) {
+    showSetupNotice(error.message, "error");
+  } finally {
+    scanAgentsButton.disabled = false;
+  }
+}
+
+function renderDiscoveredAgents(discovered) {
+  discoveredAgentsNode.replaceChildren();
+  if (!discovered.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No agents seen yet. Confirm the agent service is running and UDP 8765 is allowed on the LAN.";
+    discoveredAgentsNode.append(empty);
+    return;
+  }
+  for (const agent of discovered) {
+    const row = document.createElement("div");
+    row.className = "agent-row";
+    const identity = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = agent.name;
+    const address = document.createElement("span");
+    address.textContent = agent.url;
+    identity.append(title, address);
+    row.append(identity);
+    if (agent.paired) {
+      const paired = document.createElement("span");
+      paired.className = "state";
+      paired.dataset.state = "online";
+      paired.textContent = "Paired";
+      row.append(paired);
+    } else {
+      const token = document.createElement("input");
+      token.type = "password";
+      token.placeholder = "Agent token";
+      token.autocomplete = "off";
+      token.setAttribute("aria-label", `Token for ${agent.name}`);
+      const button = document.createElement("button");
+      button.textContent = "Pair";
+      button.addEventListener("click", async () => {
+        if (!token.value.trim()) {
+          showSetupNotice("Paste the token from the agent first.", "error");
+          return;
+        }
+        button.disabled = true;
+        try {
+          await api("/api/agents/pair", {
+            method: "POST",
+            body: JSON.stringify({ agent_id: agent.id, token: token.value.trim() }),
+          });
+          token.value = "";
+          showSetupNotice(`Paired ${agent.name}.`, "success");
+          await loadAgents();
+        } catch (error) {
+          showSetupNotice(error.message, "error");
+        } finally {
+          button.disabled = false;
+        }
+      });
+      const controls = document.createElement("div");
+      controls.className = "pair-controls";
+      controls.append(token, button);
+      row.append(controls);
+    }
+    discoveredAgentsNode.append(row);
+  }
+}
+
+async function loadVersions() {
+  const agentId = provisionAgent.value;
+  if (!agentId) {
+    showSetupNotice("Choose a paired agent first.", "error");
+    return;
+  }
+  loadVersionsButton.disabled = true;
+  serverVersion.value = "";
+  serverVersion.placeholder = "Loading publisher catalogâ€¦";
+  serverVersionOptions.replaceChildren();
+  try {
+    const catalog = await api(
+      `/api/agents/${encodeURIComponent(agentId)}/catalog/${encodeURIComponent(serverType.value)}`
+    );
+    serverVersion.placeholder = "Choose or enter a version";
+    for (const version of catalog.versions) {
+      const option = document.createElement("option");
+      option.value = version.id;
+      option.label = version.label;
+      serverVersionOptions.append(option);
+    }
+  } catch (error) {
+    serverVersion.placeholder = "Enter an exact version";
+    showSetupNotice(error.message, "error");
+  } finally {
+    loadVersionsButton.disabled = false;
+  }
+}
+
+async function watchProvisionJob(agentId, jobId) {
+  provisionJob.hidden = false;
+  provisionForm.querySelectorAll("button, input, select").forEach((node) => (node.disabled = true));
+  try {
+    for (;;) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+      const job = await api(
+        `/api/agents/${encodeURIComponent(agentId)}/jobs/${encodeURIComponent(jobId)}`
+      );
+      provisionJob.querySelector(".job-text").textContent = `Installation: ${job.state}`;
+      if (job.state === "succeeded") {
+        showSetupNotice("Server installed. It is now available on the dashboard.", "success");
+        provisionForm.reset();
+        serverVersion.value = "";
+        serverVersionOptions.replaceChildren();
+        await loadAgents();
+        return;
+      }
+      if (job.state === "failed") throw new Error(job.error || "Installation failed");
+    }
+  } catch (error) {
+    showSetupNotice(error.message, "error");
+  } finally {
+    provisionJob.hidden = true;
+    provisionForm.querySelectorAll("button, input, select").forEach((node) => (node.disabled = false));
+  }
 }
 
 function showNotice(message, kind = "info") {
@@ -84,6 +279,13 @@ function showFileNotice(message, kind = "info") {
   fileNotice.className = `notice ${kind}`;
   fileNotice.hidden = false;
   window.setTimeout(() => (fileNotice.hidden = true), 7000);
+}
+
+function showConsoleNotice(message, kind = "info") {
+  consoleNotice.textContent = message;
+  consoleNotice.className = `notice ${kind}`;
+  consoleNotice.hidden = false;
+  window.setTimeout(() => (consoleNotice.hidden = true), 7000);
 }
 
 async function loadServers() {
@@ -139,6 +341,13 @@ function renderServer(server) {
     filesButton.className = "secondary";
     filesButton.addEventListener("click", () => openFileManager(server));
     actions.append(filesButton);
+  }
+  if (server.console_enabled) {
+    const consoleButton = document.createElement("button");
+    consoleButton.textContent = "Open console";
+    consoleButton.className = "secondary";
+    consoleButton.addEventListener("click", () => openConsole(server));
+    actions.append(consoleButton);
   }
   return card;
 }
@@ -227,6 +436,7 @@ function confirmDiscardEditor() {
 }
 
 async function openFileManager(server) {
+  stopConsolePolling();
   activeFileServer = server;
   currentDirectory = "";
   currentFileEntries = [];
@@ -236,7 +446,9 @@ async function openFileManager(server) {
   dashboard.hidden = true;
   loginPanel.hidden = true;
   fileManager.hidden = false;
+  consolePanel.hidden = true;
   refreshButton.hidden = true;
+  openSetupButton.hidden = true;
   await loadDirectory("");
 }
 
@@ -344,8 +556,40 @@ function createFileRow(entry) {
     downloadButton.addEventListener("click", () => downloadFile(entry));
     entryActions.append(downloadButton);
   }
+  if (entry.name !== "..") {
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "warning file-delete";
+    deleteButton.textContent = "Delete";
+    deleteButton.addEventListener("click", () => deleteFileEntry(entry));
+    entryActions.append(deleteButton);
+  }
   row.append(nameButton, size, modified, entryActions);
   return row;
+}
+
+async function deleteFileEntry(entry) {
+  const confirmation = window.prompt(
+    `Delete ${entry.path}? This cannot be undone. Type ${entry.name} to confirm.`
+  );
+  if (confirmation === null) return;
+  if (confirmation !== entry.name) {
+    showFileNotice("The file name confirmation did not match.", "error");
+    return;
+  }
+  try {
+    await api(
+      `/api/servers/${activeFileServer.controller_id}/files?path=${encodeURIComponent(entry.path)}`,
+      { method: "DELETE" }
+    );
+    if (openDocument?.path === entry.path) {
+      openDocument = null;
+      editor.hidden = true;
+    }
+    showFileNotice(`Deleted ${entry.path}.`, "success");
+    await loadDirectory(currentDirectory);
+  } catch (error) {
+    showFileNotice(error.message, "error");
+  }
 }
 
 function downloadFile(entry) {
@@ -415,10 +659,15 @@ async function createFolder() {
   }
 }
 
-async function saveOpenFile() {
+async function saveOpenFile(restartAfterSave = false) {
   if (!openDocument) return;
+  if (restartAfterSave && !window.confirm(
+    `Save ${openDocument.path} and restart ${activeFileServer.name}?`
+  )) return;
   saveFileButton.disabled = true;
+  saveAndRestartButton.disabled = true;
   editorStatus.textContent = "Saving…";
+  let savedSuccessfully = false;
   try {
     const saved = await api(
       `/api/servers/${activeFileServer.controller_id}/files/content`,
@@ -438,11 +687,45 @@ async function saveOpenFile() {
     const savedPath = saved.path;
     await loadDirectory(currentDirectory);
     await openFile(savedPath);
+    savedSuccessfully = true;
   } catch (error) {
     editorStatus.textContent = "Not saved";
     showFileNotice(error.message, "error");
   } finally {
     saveFileButton.disabled = false;
+    saveAndRestartButton.disabled = false;
+  }
+  if (savedSuccessfully && restartAfterSave) await restartFileServer(true);
+}
+
+async function restartFileServer(alreadyConfirmed = false) {
+  if (!activeFileServer) return;
+  const server = activeFileServer;
+  if (!alreadyConfirmed && !window.confirm(`Restart ${server.name} now?`)) return;
+  restartFromFilesButton.disabled = true;
+  showFileNotice(`Restarting ${server.name}…`);
+  try {
+    const job = await api(
+      `/api/servers/${server.controller_id}/actions/restart`,
+      { method: "POST" }
+    );
+    for (;;) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      const result = await api(
+        `/api/servers/${server.controller_id}/jobs/${encodeURIComponent(job.id)}`
+      );
+      if (result.state === "succeeded") {
+        showFileNotice(`${server.name} restarted; saved changes are now active.`, "success");
+        return;
+      }
+      if (result.state === "failed") {
+        throw new Error(result.error || "Server restart failed");
+      }
+    }
+  } catch (error) {
+    showFileNotice(error.message, "error");
+  } finally {
+    restartFromFilesButton.disabled = false;
   }
 }
 
@@ -484,12 +767,128 @@ async function uploadSelectedFile() {
   }
 }
 
+function stopConsolePolling() {
+  consolePollGeneration += 1;
+  activeConsoleServer = null;
+}
+
+async function openConsole(server) {
+  stopConsolePolling();
+  activeConsoleServer = server;
+  consoleCursor = 0;
+  consoleOutput.textContent = "";
+  consoleServerName.textContent = server.name;
+  loginPanel.hidden = true;
+  dashboard.hidden = true;
+  fileManager.hidden = true;
+  setupPanel.hidden = true;
+  consolePanel.hidden = false;
+  refreshButton.hidden = true;
+  openSetupButton.hidden = true;
+  const generation = consolePollGeneration;
+  await pollConsole(generation);
+  consoleCommand.focus();
+}
+
+async function pollConsole(generation) {
+  if (generation !== consolePollGeneration || !activeConsoleServer) return;
+  const server = activeConsoleServer;
+  try {
+    const result = await api(
+      `/api/servers/${server.controller_id}/console?cursor=${consoleCursor}`
+    );
+    if (result.reset) consoleOutput.textContent = "";
+    if (result.content) {
+      consoleOutput.textContent += result.content;
+      if (consoleOutput.textContent.length > 1048576) {
+        consoleOutput.textContent = consoleOutput.textContent.slice(-1048576);
+      }
+      consoleOutput.scrollTop = consoleOutput.scrollHeight;
+    }
+    consoleCursor = result.cursor;
+  } catch (error) {
+    showConsoleNotice(error.message, "error");
+  }
+  if (generation === consolePollGeneration && activeConsoleServer) {
+    window.setTimeout(() => pollConsole(generation), 1000);
+  }
+}
+
+consoleForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!activeConsoleServer) return;
+  const command = consoleCommand.value.trim();
+  if (!command) return;
+  const submit = consoleForm.querySelector("button[type='submit']");
+  submit.disabled = true;
+  try {
+    await api(`/api/servers/${activeConsoleServer.controller_id}/console`, {
+      method: "POST",
+      body: JSON.stringify({ command }),
+    });
+    consoleCommand.value = "";
+  } catch (error) {
+    showConsoleNotice(error.message, "error");
+  } finally {
+    submit.disabled = false;
+    consoleCommand.focus();
+  }
+});
+
+closeConsoleButton.addEventListener("click", async () => {
+  showDashboard();
+  await loadServers();
+});
+
+provisionForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const agentId = provisionAgent.value;
+  if (!agentId || !serverVersion.value) {
+    showSetupNotice("Choose an agent and load a server version.", "error");
+    return;
+  }
+  const payload = {
+    id: document.querySelector("#new-server-id").value,
+    name: document.querySelector("#new-server-name").value,
+    type: serverType.value,
+    version: serverVersion.value,
+    port: Number(document.querySelector("#new-server-port").value),
+    java_path: document.querySelector("#java-path").value,
+    minimum_memory: document.querySelector("#minimum-memory").value.toUpperCase(),
+    maximum_memory: document.querySelector("#maximum-memory").value.toUpperCase(),
+    accept_eula: document.querySelector("#accept-eula").checked,
+  };
+  try {
+    const job = await api(`/api/agents/${encodeURIComponent(agentId)}/servers`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    await watchProvisionJob(agentId, job.id);
+  } catch (error) {
+    showSetupNotice(error.message, "error");
+  }
+});
+
+openSetupButton.addEventListener("click", openSetup);
+closeSetupButton.addEventListener("click", async () => {
+  showDashboard();
+  await loadServers();
+});
+scanAgentsButton.addEventListener("click", loadAgents);
+loadVersionsButton.addEventListener("click", loadVersions);
+serverType.addEventListener("change", () => {
+  serverVersion.value = "";
+  serverVersionOptions.replaceChildren();
+});
+
 closeFilesButton.addEventListener("click", leaveFileManager);
 newFileButton.addEventListener("click", beginNewFile);
 newFolderButton.addEventListener("click", createFolder);
 uploadButton.addEventListener("click", () => uploadInput.click());
 uploadInput.addEventListener("change", uploadSelectedFile);
-saveFileButton.addEventListener("click", saveOpenFile);
+restartFromFilesButton.addEventListener("click", () => restartFileServer(false));
+saveFileButton.addEventListener("click", () => saveOpenFile(false));
+saveAndRestartButton.addEventListener("click", () => saveOpenFile(true));
 closeEditorButton.addEventListener("click", () => {
   if (!confirmDiscardEditor()) return;
   openDocument = null;

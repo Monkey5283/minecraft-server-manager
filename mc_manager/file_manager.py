@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import stat
@@ -69,7 +70,9 @@ class ServerFileManager:
 
     @staticmethod
     def normalize_path(raw_path: str, *, allow_root: bool = True) -> str:
-        if "\x00" in raw_path or "\\" in raw_path:
+        if "\\" in raw_path or any(
+            ord(character) < 32 or ord(character) == 127 for character in raw_path
+        ):
             raise InvalidFilePath("File path contains unsupported characters")
         if raw_path in {"", ".", "/"}:
             if allow_root:
@@ -208,18 +211,31 @@ class ServerFileManager:
                 prefix=".mc-manager-", dir=target.parent
             )
             temporary_path = Path(raw_temporary_path)
-            mode = stat.S_IMODE(existing_stat.st_mode) if existing_stat else 0o640
+            mode = (
+                stat.S_IMODE(existing_stat.st_mode) | stat.S_IRGRP | stat.S_IWGRP
+                if existing_stat
+                else 0o660
+            )
             if hasattr(os, "fchmod"):
                 os.fchmod(file_descriptor, mode)
             else:
                 os.chmod(temporary_path, mode)
-            if existing_stat is not None and hasattr(os, "fchown"):
+            if hasattr(os, "fchown"):
+                desired_uid = existing_stat.st_uid if existing_stat is not None else -1
+                desired_gid = (
+                    existing_stat.st_gid
+                    if existing_stat is not None
+                    else target.parent.stat().st_gid
+                )
                 try:
-                    os.fchown(file_descriptor, existing_stat.st_uid, existing_stat.st_gid)
+                    os.fchown(file_descriptor, desired_uid, desired_gid)
                 except PermissionError:
-                    # Directory default ACLs still preserve server-user access when
-                    # the manager is not privileged to retain ownership.
-                    pass
+                    try:
+                        # A non-root manager can still select a group it belongs to.
+                        os.fchown(file_descriptor, -1, desired_gid)
+                    except PermissionError:
+                        # Set-group-ID server directories remain the final fallback.
+                        pass
             with os.fdopen(file_descriptor, "wb") as handle:
                 file_descriptor = -1
                 handle.write(content)
@@ -282,12 +298,49 @@ class ServerFileManager:
         if not target.parent.is_dir():
             raise ManagedFileNotFound("Parent directory not found")
         try:
-            target.mkdir(mode=0o750)
+            target.mkdir(mode=0o2770)
+            os.chmod(target, 0o2770)
+            if hasattr(os, "chown"):
+                try:
+                    os.chown(target, -1, target.parent.stat().st_gid)
+                except PermissionError:
+                    pass
         except FileExistsError as exc:
             raise FileConflict("A file or directory already exists at that path") from exc
         except OSError as exc:
             raise self._translate_os_error(exc, "Could not create directory") from exc
         return {"path": normalized, "created": True}
+
+    def delete(self, raw_path: str) -> dict:
+        normalized = self.normalize_path(raw_path, allow_root=False)
+        lexical_target = self.root / normalized
+        resolved_target = lexical_target.resolve(strict=False)
+        try:
+            resolved_target.relative_to(self.root)
+        except ValueError as exc:
+            raise InvalidFilePath(
+                "File path must stay inside the configured server root"
+            ) from exc
+        if lexical_target.is_symlink():
+            raise FileAccessDenied("Symbolic links cannot be deleted from the dashboard")
+        try:
+            if not lexical_target.exists():
+                raise ManagedFileNotFound("File or directory not found")
+            if lexical_target.is_dir():
+                lexical_target.rmdir()
+                kind = "directory"
+            elif lexical_target.is_file():
+                lexical_target.unlink()
+                kind = "file"
+            else:
+                raise FileAccessDenied("Only regular files and empty directories can be deleted")
+        except FileManagerError:
+            raise
+        except OSError as exc:
+            if exc.errno in {errno.ENOTEMPTY, errno.EEXIST}:
+                raise FileConflict("Directory is not empty") from exc
+            raise self._translate_os_error(exc, "Could not delete path") from exc
+        return {"path": normalized, "kind": kind, "deleted": True}
 
     def upload(self, raw_path: str, content: bytes, *, overwrite: bool) -> dict:
         normalized, target = self._resolve(raw_path, allow_root=False)

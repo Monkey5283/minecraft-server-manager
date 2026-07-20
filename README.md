@@ -13,14 +13,22 @@ The manager has two parts:
 The controller and agents are intended for a trusted LAN, VPN, or private
 overlay network. Do not expose their ports directly to the internet.
 
+LAN discovery advertises only the agent id, display name, and HTTP port over
+UDP `8765`; it never broadcasts the agent token. Pairing still requires the
+random token generated on that host. Discovery works inside one broadcast
+domain. Routed VLANs require a UDP relay or manual TOML configuration.
+
 ## Features
 
 - Start, stop, restart, update, and check Minecraft servers
 - Manage multiple servers across multiple Linux hosts
 - Control access through Discord users, roles, or administrators
 - Use a password-protected web dashboard
-- Optionally browse, edit, upload, and download server files from the dashboard
+- Optionally browse, edit, upload, download, and delete server files
+- Run Minecraft commands from a live, per-server web console
 - Optionally track Paper players and server transfers
+- Discover newly installed agents automatically on the local network
+- Pair agents and install Vanilla, Paper, Forge, or NeoForge from the dashboard
 - Optionally monitor a UPS and perform an orderly shutdown
 - Run only allowlisted agent commands without a shell
 
@@ -196,7 +204,52 @@ sudo bash deploy/scripts/bootstrap-minecraft-manager \
   agent https://github.com/Monkey5283/minecraft-server-manager.git main
 ```
 
+The installer creates a random agent token, uses the machine hostname as its
+discovery identity, installs a Java runtime, and enables dashboard
+provisioning. It does not install or start a Minecraft server by itself.
+
+Start the agent and retrieve its pairing token:
+
+```bash
+sudo systemctl restart mc-manager-agent
+sudo systemctl status mc-manager-agent --no-pager
+sudo sed -n 's/^MC_AGENT_TOKEN=//p' /etc/minecraft-manager/agent.env
+```
+
+In the dashboard, select **Add server**, pair the discovered host, then choose
+Paper, Vanilla, Forge, or NeoForge and a publisher-provided version. The wizard
+creates a dedicated directory below `/srv/minecraft`, a `minecraft@.service`
+instance, file management, player Query, backups, and safe lifecycle controls.
+Downloads are checksum-verified and the agent never exposes a general shell.
+
+The Minecraft EULA must be accepted explicitly in the wizard. Forge and
+NeoForge versions also require a compatible Java runtime. The default is
+`/usr/bin/java`; the wizard accepts another installed Java executable for older
+loaders.
+
 ### Configure the agent
+
+Dashboard provisioning is the recommended setup for new hosts. Its generated
+configuration enables discovery and stores provisioned definitions separately:
+
+```toml
+[agent]
+name = "minecraft-hostname"
+bind = "0.0.0.0"
+port = 8766
+token_env = "MC_AGENT_TOKEN"
+
+[discovery]
+enabled = true
+port = 8765
+instance_id = "minecraft-hostname"
+
+[provisioning]
+enabled = true
+managed_servers_file = "/srv/minecraft/.manager/managed-servers.json"
+```
+
+The manual configuration below remains supported for existing servers.
 
 Open the agent configuration:
 
@@ -275,6 +328,12 @@ placeholder with the controller's private address:
 sudo ufw allow from CONTROLLER_PRIVATE_ADDRESS to any port 8766 proto tcp
 ```
 
+On the controller, allow discovery from the local subnet when UFW is enabled:
+
+```bash
+sudo ufw allow from LAN_SUBNET to any port 8765 proto udp
+```
+
 Do not forward port `8766` through your router.
 
 ## 4. Start and verify the services
@@ -341,6 +400,12 @@ Do not forward dashboard port `8080` through your router.
 
 ## Adding more servers
 
+For provisioned agents, click **Add server** in the dashboard and select an
+already-paired host. Each installation needs a globally unique server id and
+appears in the panel as soon as its installation job completes.
+
+For manually managed servers:
+
 To add another server on an existing agent:
 
 1. Add another `[[servers]]` block to that host's `agent.toml`.
@@ -368,10 +433,11 @@ The repository includes examples for more advanced installations:
 Only enable the features you need, and grant the `mcmanager` account only the
 exact commands and directories required by those features.
 
-### Dashboard file downloads
+### Dashboard files and Minecraft console
 
-File downloads use the same opt-in file-manager root as browsing, editing, and
-uploads. Add this inside each `[[servers]]` block that should expose files:
+File downloads and destructive file operations use the same opt-in file-manager
+root as browsing, editing, and uploads. Add this inside each `[[servers]]` block
+that should expose files:
 
 ```toml
 [servers.file_manager]
@@ -381,8 +447,32 @@ max_edit_size_bytes = 2097152
 max_upload_size_bytes = 33554432
 ```
 
+To enable the Minecraft command console for a manually configured server, use
+the supplied `start-minecraft-server` launcher and add:
+
+```toml
+[servers.console]
+enabled = true
+input_pipe = ".manager/console.in"
+log_file = "logs/latest.log"
+max_command_bytes = 1024
+max_output_bytes = 262144
+```
+
 Restart that host's agent after changing the configuration. The dashboard's
-**Manage files** screen then shows a **Download** button beside every file.
+**Manage files** screen supports atomic saves, uploads, downloads, deletion of
+files or empty directories, and an explicit server restart to apply changed
+configuration. Saving a file changes it immediately; Minecraft configuration,
+plugin, and mod changes commonly require the server restart button before they
+take effect.
+
+The **Open console** screen tails `logs/latest.log` and sends single-line
+Minecraft commands through a server-owned named pipe. It deliberately cannot
+execute Linux commands. Console and file routes require both the authenticated
+dashboard session and the agent bearer token, paths stay inside the configured
+server root, and console audit logs record the command verb and a fingerprint
+without recording potentially sensitive arguments.
+
 Downloads require an authenticated dashboard session, remain confined to the
 configured root, support binary and large files, and stream through the Pi
 instead of being loaded completely into its memory. Directories are not

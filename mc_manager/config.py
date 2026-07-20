@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import os
 import re
+import json
+import socket
 import tomllib
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -82,6 +84,14 @@ class FileManagerConfig:
 
 
 @dataclass(frozen=True)
+class ConsoleConfig:
+    input_pipe: Path
+    log_file: Path
+    max_command_bytes: int = 1024
+    max_output_bytes: int = 256 * 1024
+
+
+@dataclass(frozen=True)
 class AgentServer:
     id: str
     name: str
@@ -92,6 +102,7 @@ class AgentServer:
     update_timeout_seconds: int = 1800
     player_query: PlayerQueryConfig | None = None
     file_manager: FileManagerConfig | None = None
+    console: ConsoleConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +112,11 @@ class AgentConfig:
     port: int
     token: str
     servers: tuple[AgentServer, ...]
+    instance_id: str = ""
+    discovery_enabled: bool = True
+    discovery_port: int = 8765
+    provisioning_enabled: bool = False
+    managed_servers_file: Path = Path("/srv/minecraft/.manager/managed-servers.json")
 
 
 @dataclass(frozen=True)
@@ -155,6 +171,9 @@ class ControllerConfig:
     player_tracking: PlayerTrackingConfig = field(default_factory=PlayerTrackingConfig)
     health_presence_enabled: bool = True
     health_poll_interval_seconds: float = 30.0
+    discovery_enabled: bool = True
+    discovery_port: int = 8765
+    agent_registry_file: Path = Path("/var/lib/minecraft-manager/paired-agents.json")
 
 
 def load_agent_config(path: str | Path) -> AgentConfig:
@@ -162,9 +181,57 @@ def load_agent_config(path: str | Path) -> AgentConfig:
     agent = data.get("agent", {})
     token = _required_env(str(agent.get("token_env", "MC_AGENT_TOKEN")))
 
+    provisioning = data.get("provisioning", {})
+    discovery = data.get("discovery", {})
+    managed_servers_file = Path(
+        str(
+            provisioning.get(
+                "managed_servers_file",
+                "/srv/minecraft/.manager/managed-servers.json",
+            )
+        )
+    )
+    if (
+        "managed_servers_file" in provisioning
+        and not managed_servers_file.is_absolute()
+        and not PurePosixPath(str(managed_servers_file)).is_absolute()
+    ):
+        raise ConfigError("provisioning.managed_servers_file must be an absolute path")
+
+    raw_servers = list(data.get("servers", []))
+    if managed_servers_file.exists():
+        try:
+            managed_payload = json.loads(managed_servers_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ConfigError(
+                f"Invalid managed server registry {managed_servers_file}: {exc}"
+            ) from exc
+        managed_entries = (
+            managed_payload.get("servers", [])
+            if isinstance(managed_payload, dict)
+            else None
+        )
+        if not isinstance(managed_entries, list):
+            raise ConfigError(
+                f"Invalid managed server registry {managed_servers_file}: servers must be a list"
+            )
+        for managed_entry in managed_entries:
+            if not isinstance(managed_entry, dict):
+                raw_servers.append(managed_entry)
+                continue
+            normalized_entry = dict(managed_entry)
+            working_directory = str(normalized_entry.get("working_directory", ""))
+            if "console" not in normalized_entry and working_directory:
+                normalized_entry["console"] = {
+                    "enabled": True,
+                    "input_pipe": f"{working_directory}/.manager/console.in",
+                    "log_file": f"{working_directory}/logs/latest.log",
+                }
+            raw_servers.append(normalized_entry)
+
     servers: list[AgentServer] = []
     seen: set[str] = set()
-    for raw in data.get("servers", []):
+    for raw in raw_servers:
         server_id = _validate_id(str(raw.get("id", "")), "Agent server id")
         if server_id in seen:
             raise ConfigError(f"Duplicate agent server id: {server_id}")
@@ -259,6 +326,48 @@ def load_agent_config(path: str | Path) -> AgentConfig:
                 timeout_seconds=query_timeout,
                 offline_status_codes=tuple(raw_offline_codes),
             )
+        raw_console = raw.get("console")
+        console = None
+        if raw_console is not None:
+            if not isinstance(raw_console, dict):
+                raise ConfigError(f"{server_id}.console must be a table")
+            if bool(raw_console.get("enabled", False)):
+                raw_pipe = Path(str(raw_console.get("input_pipe", ".manager/console.in")))
+                raw_log = Path(str(raw_console.get("log_file", "logs/latest.log")))
+                console_pipe = (
+                    raw_pipe if raw_pipe.is_absolute() else working_directory / raw_pipe
+                ).resolve()
+                console_log = (
+                    raw_log if raw_log.is_absolute() else working_directory / raw_log
+                ).resolve()
+                for console_path, label in (
+                    (console_pipe, "input_pipe"),
+                    (console_log, "log_file"),
+                ):
+                    try:
+                        console_path.relative_to(working_directory)
+                    except ValueError as exc:
+                        raise ConfigError(
+                            f"{server_id}.console.{label} must stay inside working_directory"
+                        ) from exc
+                max_command_bytes = int(raw_console.get("max_command_bytes", 1024))
+                max_output_bytes = int(
+                    raw_console.get("max_output_bytes", 256 * 1024)
+                )
+                if not 64 <= max_command_bytes <= 4096:
+                    raise ConfigError(
+                        f"{server_id}.console.max_command_bytes must be between 64 and 4096"
+                    )
+                if not 4096 <= max_output_bytes <= 1024 * 1024:
+                    raise ConfigError(
+                        f"{server_id}.console.max_output_bytes must be between 4096 and 1048576"
+                    )
+                console = ConsoleConfig(
+                    input_pipe=console_pipe,
+                    log_file=console_log,
+                    max_command_bytes=max_command_bytes,
+                    max_output_bytes=max_output_bytes,
+                )
         servers.append(
             AgentServer(
                 id=server_id,
@@ -270,16 +379,28 @@ def load_agent_config(path: str | Path) -> AgentConfig:
                 update_timeout_seconds=int(raw.get("update_timeout_seconds", 1800)),
                 player_query=player_query,
                 file_manager=file_manager,
+                console=console,
             )
         )
-    if not servers:
+    provisioning_enabled = bool(provisioning.get("enabled", False))
+    if not servers and not provisioning_enabled:
         raise ConfigError("At least one [[servers]] entry is required")
+    discovery_port = int(discovery.get("port", 8765))
+    if not 1 <= discovery_port <= 65535:
+        raise ConfigError("discovery.port must be between 1 and 65535")
     return AgentConfig(
         name=str(agent.get("name", "minecraft-host")),
         bind=str(agent.get("bind", "0.0.0.0")),
         port=int(agent.get("port", 8766)),
         token=token,
         servers=tuple(servers),
+        instance_id=str(
+            discovery.get("instance_id", agent.get("name", socket.gethostname()))
+        ),
+        discovery_enabled=bool(discovery.get("enabled", True)),
+        discovery_port=discovery_port,
+        provisioning_enabled=provisioning_enabled,
+        managed_servers_file=managed_servers_file,
     )
 
 
@@ -290,6 +411,7 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
     discord = data.get("discord", {})
     ups = data.get("ups", {})
     player_tracking = data.get("player_tracking", {})
+    discovery = data.get("discovery", {})
 
     servers: list[RemoteServer] = []
     seen: set[str] = set()
@@ -310,8 +432,9 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
                 track_players=bool(raw.get("track_players", False)),
             )
         )
-    if not servers:
-        raise ConfigError("At least one [[servers]] entry is required")
+    discovery_port = int(discovery.get("port", 8765))
+    if not 1 <= discovery_port <= 65535:
+        raise ConfigError("discovery.port must be between 1 and 65535")
 
     guild_id = int(discord.get("guild_id", 0)) or None
     announcement_channel_id = int(discord.get("announcement_channel_id", 0)) or None
@@ -403,5 +526,15 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
         health_presence_enabled=bool(discord.get("health_presence_enabled", True)),
         health_poll_interval_seconds=max(
             10.0, float(discord.get("health_poll_interval_seconds", 30))
+        ),
+        discovery_enabled=bool(discovery.get("enabled", True)),
+        discovery_port=discovery_port,
+        agent_registry_file=Path(
+            str(
+                discovery.get(
+                    "agent_registry_file",
+                    "/var/lib/minecraft-manager/paired-agents.json",
+                )
+            )
         ),
     )

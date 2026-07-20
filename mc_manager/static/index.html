@@ -16,6 +16,7 @@
         </div>
         <div class="header-actions">
           <span id="last-updated"></span>
+          <button id="open-setup" class="secondary" hidden>Add server</button>
           <button id="refresh" class="secondary" hidden>Refresh</button>
           <button id="logout" class="secondary" hidden>Sign out</button>
         </div>
@@ -51,6 +52,7 @@
           <div class="file-toolbar">
             <nav id="file-breadcrumbs" class="breadcrumbs" aria-label="Current directory"></nav>
             <div class="file-actions">
+              <button id="restart-from-files" class="warning">Restart server</button>
               <button id="new-file" class="secondary">New file</button>
               <button id="new-folder" class="secondary">New folder</button>
               <button id="upload-file">Upload</button>
@@ -81,9 +83,87 @@
               <textarea id="editor-content" spellcheck="false" aria-label="File content"></textarea>
               <div class="editor-footer">
                 <span id="editor-status"></span>
-                <button id="save-file">Save changes</button>
+                <div class="editor-actions">
+                  <button id="save-and-restart" class="warning">Save &amp; restart</button>
+                  <button id="save-file">Save changes</button>
+                </div>
               </div>
             </aside>
+          </div>
+        </section>
+
+        <section id="console-panel" hidden>
+          <div class="console-heading">
+            <div>
+              <p class="eyebrow">MINECRAFT CONSOLE</p>
+              <h2 id="console-server-name"></h2>
+            </div>
+            <button id="close-console" class="secondary">Back to servers</button>
+          </div>
+          <div id="console-notice" class="notice" hidden></div>
+          <section class="panel console-card">
+            <p class="console-warning">Minecraft server commands only. This is intentionally not a Linux shell and cannot run operating-system commands.</p>
+            <pre id="console-output" tabindex="0" aria-live="polite" aria-label="Minecraft server console output"></pre>
+            <form id="console-form" autocomplete="off">
+              <label for="console-command">Command</label>
+              <div class="console-command-row">
+                <input id="console-command" maxlength="1024" placeholder="say Server maintenance starts in 5 minutes" required />
+                <button type="submit">Send</button>
+              </div>
+            </form>
+          </section>
+        </section>
+
+        <section id="setup-panel" hidden>
+          <div class="setup-heading">
+            <div>
+              <p class="eyebrow">LAN ONBOARDING</p>
+              <h2>Add a Minecraft server</h2>
+            </div>
+            <button id="close-setup" class="secondary">Back to servers</button>
+          </div>
+          <div id="setup-notice" class="notice" hidden></div>
+          <div class="setup-grid">
+            <section class="panel setup-step">
+              <p class="eyebrow">STEP 1</p>
+              <h3>Discover and pair an agent</h3>
+              <p class="muted">Agents on this LAN appear automatically. Retrieve an agent's token with <code>sudo sed -n 's/^MC_AGENT_TOKEN=//p' /etc/minecraft-manager/agent.env</code>.</p>
+              <div id="discovered-agents" class="agent-list"></div>
+              <button id="scan-agents" class="secondary">Scan again</button>
+            </section>
+            <section class="panel setup-step">
+              <p class="eyebrow">STEP 2</p>
+              <h3>Install server software</h3>
+              <form id="provision-form">
+                <label>Agent<select id="provision-agent" required></select></label>
+                <label>Server software
+                  <select id="server-type" required>
+                    <option value="paper">PaperMC</option>
+                    <option value="vanilla">Vanilla</option>
+                    <option value="forge">Forge</option>
+                    <option value="neoforge">NeoForge</option>
+                  </select>
+                </label>
+                <label>Version
+                  <div class="inline-field">
+                    <input id="server-version" list="server-version-options" placeholder="Load or enter an exact version" required />
+                    <datalist id="server-version-options"></datalist>
+                    <button id="load-versions" type="button" class="secondary">Load versions</button>
+                  </div>
+                </label>
+                <div class="two-column-fields">
+                  <label>Server ID<input id="new-server-id" placeholder="vanillaplus" pattern="[a-z0-9][a-z0-9_-]{0,63}" required /></label>
+                  <label>Display name<input id="new-server-name" placeholder="Vanilla Plus" maxlength="128" required /></label>
+                  <label>Port<input id="new-server-port" type="number" min="1024" max="65535" value="25565" required /></label>
+                  <label>Java executable<input id="java-path" value="/usr/bin/java" required /></label>
+                  <label>Minimum memory<input id="minimum-memory" value="1G" pattern="[1-9][0-9]{0,5}[MGmg]" required /></label>
+                  <label>Maximum memory<input id="maximum-memory" value="4G" pattern="[1-9][0-9]{0,5}[MGmg]" required /></label>
+                </div>
+                <label class="checkbox-label"><input id="accept-eula" type="checkbox" required /> I agree to the <a href="https://www.minecraft.net/eula" target="_blank" rel="noreferrer">Minecraft EULA</a>.</label>
+                <button id="install-server" type="submit">Install server</button>
+              </form>
+              <div id="provision-job" class="job" hidden><span class="spinner"></span><span class="job-text"></span></div>
+            </section>
           </div>
         </section>
       </main>

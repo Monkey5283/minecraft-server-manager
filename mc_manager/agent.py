@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import hmac
+import json
 import logging
 import os
 import time
 import uuid
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -15,12 +18,15 @@ from urllib.parse import quote
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from .config import AgentConfig, AgentServer, ConfigError, load_agent_config
+from .discovery import advertise_agent
 from .file_manager import FileManagerError, ServerFileManager
 from .minecraft_query import MinecraftQueryError, query_players
+from .server_catalog import CatalogError, list_versions
+from .server_console import ServerConsole, ServerConsoleError
 
 
 LOG = logging.getLogger("mc_manager.agent")
@@ -36,6 +42,22 @@ class FileWriteRequest(BaseModel):
 
 class DirectoryCreateRequest(BaseModel):
     path: str
+
+
+class ConsoleCommandRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=4096)
+
+
+class ProvisionRequest(BaseModel):
+    id: str
+    name: str
+    type: str
+    version: str
+    port: int = 25565
+    minimum_memory: str = "1G"
+    maximum_memory: str = "4G"
+    java_path: str = "/usr/bin/java"
+    accept_eula: bool = False
 
 
 class CommandFailed(RuntimeError):
@@ -61,8 +83,10 @@ class Job:
 
 
 class AgentRuntime:
-    def __init__(self, config: AgentConfig):
+    def __init__(self, config: AgentConfig, config_path: Path | None = None):
         self.config = config
+        self.config_path = config_path
+        self.provisioning_lock = asyncio.Lock()
         self.servers = {server.id: server for server in config.servers}
         self.locks = {server.id: asyncio.Lock() for server in config.servers}
         self.file_managers = {
@@ -70,7 +94,30 @@ class AgentRuntime:
             for server in config.servers
             if server.file_manager is not None
         }
+        self.consoles = {
+            server.id: ServerConsole(server.console)
+            for server in config.servers
+            if server.console is not None
+        }
         self.jobs: OrderedDict[str, Job] = OrderedDict()
+
+    def replace_config(self, config: AgentConfig) -> None:
+        self.config = config
+        self.servers = {server.id: server for server in config.servers}
+        self.locks = {
+            server.id: self.locks.get(server.id, asyncio.Lock())
+            for server in config.servers
+        }
+        self.file_managers = {
+            server.id: ServerFileManager(server.file_manager)
+            for server in config.servers
+            if server.file_manager is not None
+        }
+        self.consoles = {
+            server.id: ServerConsole(server.console)
+            for server in config.servers
+            if server.console is not None
+        }
 
     async def execute_steps(
         self,
@@ -137,10 +184,82 @@ class AgentRuntime:
         asyncio.create_task(self.run_job(job, server, steps, timeout))
         return job
 
+    async def run_provision_job(self, job: Job, payload: dict) -> None:
+        async with self.provisioning_lock:
+            job.state = "running"
+            job.started_at = time.time()
+            command = (
+                "sudo",
+                "-n",
+                "/opt/minecraft-manager/venv/bin/mc-manager-provision",
+                "--request",
+                json.dumps(payload, separators=(",", ":")),
+            )
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=os.environ.copy(),
+                )
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=3600)
+                output = stdout.decode("utf-8", errors="replace")[-MAX_OUTPUT:]
+                if process.returncode != 0:
+                    raise CommandFailed(command[2], process.returncode, output)
+                job.output = output
+                if self.config_path is None:
+                    raise RuntimeError("Agent configuration path is unavailable for reload")
+                self.replace_config(load_agent_config(self.config_path))
+                job.state = "succeeded"
+            except Exception as exc:
+                LOG.exception("Provisioning job %s failed", job.id)
+                job.error = str(exc)[-MAX_OUTPUT:]
+                job.state = "failed"
+            finally:
+                job.completed_at = time.time()
 
-def create_agent_app(config: AgentConfig) -> FastAPI:
-    app = FastAPI(title=f"Minecraft Agent - {config.name}", docs_url=None, redoc_url=None)
-    runtime = AgentRuntime(config)
+    def start_provision_job(self, payload: dict) -> Job:
+        while len(self.jobs) >= MAX_JOBS:
+            self.jobs.popitem(last=False)
+        job = Job(
+            id=str(uuid.uuid4()),
+            server_id=str(payload.get("id", "")),
+            operation="provision",
+        )
+        self.jobs[job.id] = job
+        asyncio.create_task(self.run_provision_job(job, payload))
+        return job
+
+
+def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        discovery_task = (
+            asyncio.create_task(
+                advertise_agent(
+                    config.instance_id or config.name,
+                    config.name,
+                    config.port,
+                    config.discovery_port,
+                )
+            )
+            if config.discovery_enabled
+            else None
+        )
+        try:
+            yield
+        finally:
+            if discovery_task is not None:
+                discovery_task.cancel()
+                await asyncio.gather(discovery_task, return_exceptions=True)
+
+    app = FastAPI(
+        title=f"Minecraft Agent - {config.name}",
+        docs_url=None,
+        redoc_url=None,
+        lifespan=lifespan,
+    )
+    runtime = AgentRuntime(config, config_path)
     app.state.runtime = runtime
 
     async def authenticate(authorization: str | None = Header(default=None)) -> None:
@@ -167,17 +286,72 @@ def create_agent_app(config: AgentConfig) -> FastAPI:
             )
         return server, manager
 
+    def find_console(server_id: str) -> tuple[AgentServer, ServerConsole]:
+        server = find_server(server_id)
+        console = runtime.consoles.get(server_id)
+        if console is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Minecraft console is not enabled for this server",
+            )
+        return server, console
+
     def file_error(exc: FileManagerError) -> HTTPException:
+        return HTTPException(status_code=exc.status_code, detail=str(exc))
+
+    def console_error(exc: ServerConsoleError) -> HTTPException:
         return HTTPException(status_code=exc.status_code, detail=str(exc))
 
     @app.get("/v1/health")
     async def health() -> dict:
         return {"ok": True, "agent": config.name}
 
+    @app.get("/v1/info", dependencies=[Depends(authenticate)])
+    async def info() -> dict:
+        return {
+            "id": config.instance_id or config.name,
+            "name": config.name,
+            "provisioning_enabled": config.provisioning_enabled,
+            "server_types": ["paper", "vanilla", "forge", "neoforge"],
+            "servers": [
+                {
+                    "id": server.id,
+                    "name": server.name,
+                    "track_players": server.player_query is not None,
+                }
+                for server in runtime.config.servers
+            ],
+        }
+
+    @app.get("/v1/catalog/{server_type}", dependencies=[Depends(authenticate)])
+    async def catalog(server_type: str) -> dict:
+        if not config.provisioning_enabled:
+            raise HTTPException(status_code=409, detail="Agent provisioning is disabled")
+        try:
+            versions = await asyncio.to_thread(list_versions, server_type)
+        except CatalogError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "type": server_type,
+            "versions": [version.as_dict() for version in versions],
+        }
+
+    @app.post("/v1/provision", dependencies=[Depends(authenticate)])
+    async def provision(payload: ProvisionRequest) -> dict:
+        if not config.provisioning_enabled:
+            raise HTTPException(status_code=409, detail="Agent provisioning is disabled")
+        if runtime.config_path is None:
+            raise HTTPException(status_code=409, detail="Agent cannot reload its configuration")
+        if runtime.provisioning_lock.locked():
+            raise HTTPException(status_code=409, detail="Another server is being installed")
+        if payload.id in runtime.servers:
+            raise HTTPException(status_code=409, detail="Server id already exists")
+        return asdict(runtime.start_provision_job(payload.model_dump()))
+
     @app.get("/v1/servers", dependencies=[Depends(authenticate)])
     async def list_servers() -> list[dict]:
         results = []
-        for server in config.servers:
+        for server in runtime.config.servers:
             state = "unknown"
             detail = ""
             if runtime.locks[server.id].locked():
@@ -200,6 +374,8 @@ def create_agent_app(config: AgentConfig) -> FastAPI:
                     "actions": sorted(server.actions.keys() - {"status"}),
                     "scripts": sorted(server.scripts.keys()),
                     "files_enabled": server.file_manager is not None,
+                    "console_enabled": server.console is not None,
+                    "player_tracking_available": server.player_query is not None,
                 }
             )
         return results
@@ -324,6 +500,52 @@ def create_agent_app(config: AgentConfig) -> FastAPI:
         LOG.info("Uploaded managed file %s:%s", server.id, result["path"])
         return result
 
+    @app.delete(
+        "/v1/servers/{server_id}/files",
+        dependencies=[Depends(authenticate)],
+    )
+    async def delete_file(server_id: str, path: str) -> dict:
+        server, manager = find_file_manager(server_id)
+        if runtime.locks[server.id].locked():
+            raise HTTPException(status_code=409, detail="Server maintenance is in progress")
+        async with runtime.locks[server.id]:
+            try:
+                result = manager.delete(path)
+            except FileManagerError as exc:
+                raise file_error(exc) from exc
+        LOG.warning("Deleted managed %s %s:%s", result["kind"], server.id, result["path"])
+        return result
+
+    @app.get(
+        "/v1/servers/{server_id}/console",
+        dependencies=[Depends(authenticate)],
+    )
+    async def console_output(server_id: str, cursor: int = 0) -> dict:
+        _, console = find_console(server_id)
+        try:
+            return await asyncio.to_thread(console.read_output, cursor)
+        except ServerConsoleError as exc:
+            raise console_error(exc) from exc
+
+    @app.post(
+        "/v1/servers/{server_id}/console",
+        dependencies=[Depends(authenticate)],
+    )
+    async def console_command(server_id: str, payload: ConsoleCommandRequest) -> dict:
+        server, console = find_console(server_id)
+        try:
+            result = await asyncio.to_thread(console.send_command, payload.command)
+        except ServerConsoleError as exc:
+            raise console_error(exc) from exc
+        fingerprint = hashlib.sha256(payload.command.encode("utf-8")).hexdigest()[:12]
+        LOG.warning(
+            "Accepted Minecraft console command server=%s verb=%s fingerprint=%s",
+            server.id,
+            result["command"],
+            fingerprint,
+        )
+        return result
+
     @app.get(
         "/v1/servers/{server_id}/players",
         dependencies=[Depends(authenticate)],
@@ -443,10 +665,11 @@ def main() -> None:
     )
     args = parse_args()
     try:
-        config = load_agent_config(Path(args.config))
+        config_path = Path(args.config)
+        config = load_agent_config(config_path)
     except ConfigError as exc:
         raise SystemExit(str(exc)) from exc
-    uvicorn.run(create_agent_app(config), host=config.bind, port=config.port)
+    uvicorn.run(create_agent_app(config, config_path), host=config.bind, port=config.port)
 
 
 if __name__ == "__main__":

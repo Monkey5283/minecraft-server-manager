@@ -25,6 +25,8 @@ dev = [
 mc-manager-controller = "mc_manager.controller:main"
 mc-manager-agent = "mc_manager.agent:main"
 mc-manager-resolve-paper = "mc_manager.paper_download:main"
+mc-manager-provision = "mc_manager.server_installer:main"
+mc-manager-managed-action = "mc_manager.server_installer:managed_action_main"
 
 [tool.setuptools]
 include-package-data = true

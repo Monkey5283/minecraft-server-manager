@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ $# -eq 1 && "$1" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || {
+  echo "usage: start-minecraft-server SERVER_ID" >&2
+  exit 2
+}
+
+server_id="$1"
+server_dir="/srv/minecraft/${server_id}"
+cd "$server_dir"
+
+manager_dir="${server_dir}/.manager"
+console_pipe="${manager_dir}/console.in"
+install -d -m 0770 "$manager_dir"
+if [[ -e "$console_pipe" && ! -p "$console_pipe" ]]; then
+  echo "refusing to replace non-pipe console input: $console_pipe" >&2
+  exit 1
+fi
+if [[ ! -p "$console_pipe" ]]; then
+  mkfifo -m 0660 "$console_pipe"
+fi
+# Keeping the FIFO open read/write prevents EOF between dashboard commands.
+exec 3<>"$console_pipe"
+
+if [[ -x ./start-server ]]; then
+  exec ./start-server <&3
+fi
+
+# Backward-compatible path for servers created before dashboard provisioning.
+exec /usr/bin/java \
+  -Xms"${JAVA_MIN_MEMORY:-1G}" \
+  -Xmx"${JAVA_MAX_MEMORY:-4G}" \
+  -jar server.jar nogui <&3
