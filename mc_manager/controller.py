@@ -66,6 +66,10 @@ class PairAgentRequest(BaseModel):
     token: str
 
 
+class AdoptAgentRequest(BaseModel):
+    source_server_id: str
+
+
 class ProvisionServerRequest(BaseModel):
     id: str
     name: str
@@ -185,10 +189,16 @@ def create_controller_app(
                         detail=f"Server id is already used: {server_id}",
                     )
                 if server_id in servers and owner is None:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Server id conflicts with controller.toml: {server_id}",
+                    configured = base_server_map.get(server_id)
+                    same_trusted_agent = configured is not None and (
+                        configured.agent_url.rstrip("/") == agent.url.rstrip("/")
+                        and hmac.compare_digest(configured.token, agent.token)
                     )
+                    if not same_trusted_agent:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=f"Server id conflicts with controller.toml: {server_id}",
+                        )
                 refreshed.append(
                     RegisteredServer(
                         id=server_id,
@@ -568,6 +578,57 @@ def create_controller_app(
             }
             for agent in paired.agents.values()
         ]
+
+    @app.get("/api/agents/configured")
+    async def configured_agents(request: Request) -> list[dict]:
+        require_login(request)
+        result: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        paired_credentials = {
+            (agent.url.rstrip("/"), agent.token) for agent in paired.agents.values()
+        }
+        for server in base_servers:
+            credentials = (server.agent_url.rstrip("/"), server.token)
+            if credentials in seen:
+                continue
+            seen.add(credentials)
+            result.append(
+                {
+                    "source_server_id": server.id,
+                    "name": server.name,
+                    "url": credentials[0],
+                    "paired": credentials in paired_credentials,
+                }
+            )
+        return result
+
+    @app.post("/api/agents/adopt")
+    async def adopt_configured_agent(
+        payload: AdoptAgentRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        source = base_server_map.get(payload.source_server_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="Unknown configured server")
+        try:
+            info = await agents.info(source)
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        agent_id = str(info.get("id", "")).strip()
+        if not agent_id or len(agent_id) > 128:
+            raise HTTPException(status_code=502, detail="Agent returned an invalid identity")
+        if not bool(info.get("provisioning_enabled", False)):
+            raise HTTPException(status_code=409, detail="Agent provisioning is disabled")
+        candidate = PairedAgent(
+            id=agent_id,
+            name=str(info.get("name", source.name)),
+            url=source.agent_url.rstrip("/"),
+            token=source.token,
+        )
+        sync_paired_agent(candidate, info)
+        paired.put(candidate)
+        sync_runtime_servers()
+        return {"ok": True, "id": candidate.id, "name": candidate.name}
 
     @app.post("/api/agents/pair")
     async def pair_agent(payload: PairAgentRequest, request: Request) -> dict:

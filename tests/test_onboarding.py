@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import httpx
 
-from mc_manager.config import ControllerConfig
+from mc_manager.config import ControllerConfig, RemoteServer
 from mc_manager.controller import create_controller_app
 from mc_manager.discovery import encode_beacon
 
@@ -63,3 +64,98 @@ async def test_dashboard_discovers_and_pairs_agent(tmp_path: Path, monkeypatch) 
     remote = agents.info.await_args.args[0]
     assert remote.agent_url == "http://192.168.1.126:8766"
     assert remote.token == "agent-token"
+
+
+async def test_dashboard_adopts_configured_agent_without_exposing_token(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = onboarding_config(tmp_path)
+    config = replace(
+        config,
+        servers=(
+            RemoteServer(
+                id="vanillaplus",
+                name="Vanilla Plus",
+                agent_url="http://192.168.1.126:8766",
+                token="existing-secret-token",
+            ),
+        ),
+    )
+    agents = AsyncMock()
+    agents.info.return_value = {
+        "id": "vanillaplus-host",
+        "name": "Vanilla Plus Host",
+        "provisioning_enabled": True,
+        "servers": [
+            {"id": "vanillaplus", "name": "Vanilla Plus", "track_players": False}
+        ],
+    }
+    monkeypatch.setattr("mc_manager.controller.AgentClient", lambda: agents)
+    monkeypatch.setattr("mc_manager.controller.MinecraftDiscordBot", lambda *a, **k: object())
+    app = create_controller_app(config)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post("/api/login", json={"username": "admin", "password": "password"})
+        configured = await client.get("/api/agents/configured")
+        assert configured.status_code == 200
+        assert configured.json() == [
+            {
+                "source_server_id": "vanillaplus",
+                "name": "Vanilla Plus",
+                "url": "http://192.168.1.126:8766",
+                "paired": False,
+            }
+        ]
+        assert "existing-secret-token" not in configured.text
+
+        adopted = await client.post(
+            "/api/agents/adopt", json={"source_server_id": "vanillaplus"}
+        )
+        assert adopted.status_code == 200
+        listed = (await client.get("/api/agents")).json()
+        assert listed[0]["id"] == "vanillaplus-host"
+        assert listed[0]["servers"][0]["id"] == "vanillaplus"
+
+    persisted = json.loads((tmp_path / "paired-agents.json").read_text())
+    assert persisted["agents"][0]["token"] == "existing-secret-token"
+    agents.info.assert_awaited_once()
+
+
+async def test_configured_agent_must_support_provisioning(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = onboarding_config(tmp_path)
+    config = replace(
+        config,
+        servers=(
+            RemoteServer(
+                id="legacy",
+                name="Legacy",
+                agent_url="http://legacy:8766",
+                token="legacy-token",
+            ),
+        ),
+    )
+    agents = AsyncMock()
+    agents.info.return_value = {
+        "id": "legacy-host",
+        "name": "Legacy Host",
+        "provisioning_enabled": False,
+        "servers": [],
+    }
+    monkeypatch.setattr("mc_manager.controller.AgentClient", lambda: agents)
+    monkeypatch.setattr("mc_manager.controller.MinecraftDiscordBot", lambda *a, **k: object())
+    app = create_controller_app(config)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post("/api/login", json={"username": "admin", "password": "password"})
+        response = await client.post(
+            "/api/agents/adopt", json={"source_server_id": "legacy"}
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Agent provisioning is disabled"
