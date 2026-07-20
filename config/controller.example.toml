@@ -29,6 +29,40 @@ health_poll_interval_seconds = 30
 allowed_user_ids = [123456789012345678]
 allowed_role_ids = [123456789012345678]
 
+[instructions]
+# Public Discord response for /instructions. Discord messages are limited to
+# 2,000 characters. Markdown is supported and mentions are always suppressed.
+message = """
+***HOW TO JOIN MONKEYCRAFT***
+
+**Java Edition - Windows, macOS, or Linux**
+Go to **Multiplayer -> Add Server**.
+**Server Address:** `monkeycraft.monkeyservers.net:20208`
+Click **Done**, select Monkeycraft, and click **Join Server**.
+
+**Bedrock Edition - Windows, iPhone/iPad, or Android**
+Go to **Play -> Servers -> Add Server**.
+**Server Name:** `Monkeycraft`
+**Server Address:** `monkeycraft.monkeyservers.net`
+**Port:** `20210`
+The server name cannot be empty. Click **Add and Play**.
+
+**Console Bedrock Edition - Xbox, PlayStation, Nintendo Switch, and Switch 2**
+No mobile app, DNS changes, ads, or server address entry are required.
+
+**First-time setup:**
+1. Sign in to Minecraft with your Microsoft account.
+2. Go to **Play -> Friends -> Add Friend/Find Cross-Platform Friends**.
+3. Search for and add **`Monkeycraft5823`**.
+4. Wait up to one minute for it to add you back.
+5. Return to **Play -> Friends -> Joinable Friends**.
+6. Select the Monkeycraft session and join.
+
+After setup, open **Play -> Friends** and select the server whenever you want to play.
+
+If it does not appear, fully close and reopen Minecraft. Make sure cross-network multiplayer is allowed and you have the required console subscription: Nintendo Switch Online, PlayStation Plus, or Xbox Game Pass Core.
+"""
+
 [player_tracking]
 # Optional Discord messages for Paper player sessions. The message is edited
 # when a player changes servers and finalized when they leave the network.

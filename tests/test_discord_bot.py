@@ -267,6 +267,28 @@ async def test_players_success_is_posted_to_the_channel(monkeypatch) -> None:
     assert "ephemeral" not in interaction.followup.send.await_args.kwargs
 
 
+async def test_instructions_are_public_and_available_to_every_user() -> None:
+    config = replace(
+        make_health_config(),
+        instructions_message="Join at `play.example.com`.",
+    )
+    bot = MinecraftDiscordBot(config, Mock())
+    bot.is_allowed = Mock(side_effect=AssertionError("permission check was called"))
+    command = bot.tree.get_command("instructions")
+    assert command is not None
+    assert command.default_permissions is None
+    interaction = Mock()
+    interaction.response.send_message = AsyncMock()
+
+    await command.callback(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    call = interaction.response.send_message.await_args
+    assert call.args == ("Join at `play.example.com`.",)
+    assert "ephemeral" not in call.kwargs
+    assert call.kwargs["allowed_mentions"].to_dict() == {"parse": []}
+
+
 async def test_players_message_is_public_and_shows_current_servers() -> None:
     servers = (
         RemoteServer(

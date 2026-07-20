@@ -171,6 +171,7 @@ class ControllerConfig:
     player_tracking: PlayerTrackingConfig = field(default_factory=PlayerTrackingConfig)
     health_presence_enabled: bool = True
     health_poll_interval_seconds: float = 30.0
+    instructions_message: str = "Server join instructions have not been configured yet."
     discovery_enabled: bool = True
     discovery_port: int = 8765
     agent_registry_file: Path = Path("/var/lib/minecraft-manager/paired-agents.json")
@@ -409,9 +410,25 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
     controller = data.get("controller", {})
     auth = data.get("auth", {})
     discord = data.get("discord", {})
+    instructions = data.get("instructions")
     ups = data.get("ups", {})
     player_tracking = data.get("player_tracking", {})
     discovery = data.get("discovery", {})
+
+    instructions_message = "Server join instructions have not been configured yet."
+    if instructions is not None:
+        if not isinstance(instructions, dict):
+            raise ConfigError("instructions must be a table")
+        raw_instructions_message = instructions.get("message")
+        if not isinstance(raw_instructions_message, str):
+            raise ConfigError("instructions.message must be a string")
+        instructions_message = raw_instructions_message.strip()
+        if not instructions_message:
+            raise ConfigError("instructions.message must not be empty")
+        if len(instructions_message) > 2000:
+            raise ConfigError(
+                "instructions.message must not exceed Discord's 2000 character limit"
+            )
 
     servers: list[RemoteServer] = []
     seen: set[str] = set()
@@ -527,6 +544,7 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
         health_poll_interval_seconds=max(
             10.0, float(discord.get("health_poll_interval_seconds", 30))
         ),
+        instructions_message=instructions_message,
         discovery_enabled=bool(discovery.get("enabled", True)),
         discovery_port=discovery_port,
         agent_registry_file=Path(

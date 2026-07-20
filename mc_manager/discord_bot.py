@@ -210,6 +210,16 @@ class MinecraftDiscordBot(discord.Client):
             )
 
         @self.tree.command(
+            name="instructions",
+            description="Show how to join the Minecraft server",
+        )
+        async def instructions(interaction: discord.Interaction) -> None:
+            await interaction.response.send_message(
+                self.config.instructions_message,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        @self.tree.command(
             name="ups",
             description="Show the controller battery backup status",
         )

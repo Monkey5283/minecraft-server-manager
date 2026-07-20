@@ -243,6 +243,76 @@ token_env = "AGENT"
     assert loaded.announcement_channel_id == 456
 
 
+def test_controller_loads_public_instructions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    for name in ("WEB", "SESSION", "DISCORD", "AGENT"):
+        monkeypatch.setenv(name, "secret")
+    config = tmp_path / "controller.toml"
+    config.write_text(
+        '''
+[auth]
+web_password_env = "WEB"
+session_secret_env = "SESSION"
+[discord]
+discord_token_env = "DISCORD"
+[instructions]
+message = """
+**How to join**
+Address: `play.example.com`
+"""
+[[servers]]
+id = "survival"
+agent_url = "http://192.168.1.20:8766"
+token_env = "AGENT"
+''',
+        encoding="utf-8",
+    )
+
+    loaded = load_controller_config(config)
+
+    assert loaded.instructions_message == (
+        "**How to join**\nAddress: `play.example.com`"
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "error"),
+    [
+        ("", "must not be empty"),
+        ("x" * 2001, "2000 character limit"),
+    ],
+)
+def test_controller_rejects_invalid_public_instructions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+    error: str,
+):
+    for name in ("WEB", "SESSION", "DISCORD", "AGENT"):
+        monkeypatch.setenv(name, "secret")
+    config = tmp_path / "controller.toml"
+    config.write_text(
+        f'''
+[auth]
+web_password_env = "WEB"
+session_secret_env = "SESSION"
+[discord]
+discord_token_env = "DISCORD"
+[instructions]
+message = {message!r}
+[[servers]]
+id = "survival"
+agent_url = "http://192.168.1.20:8766"
+token_env = "AGENT"
+''',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match=error):
+        load_controller_config(config)
+
+
 def test_controller_loads_ups_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     for name in ("WEB", "SESSION", "DISCORD", "AGENT"):
         monkeypatch.setenv(name, "secret")
