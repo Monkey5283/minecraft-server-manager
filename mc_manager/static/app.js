@@ -45,6 +45,15 @@ const softwareVersionOptions = document.querySelector("#software-version-options
 const loadSoftwareVersionsButton = document.querySelector("#load-software-versions");
 const softwareJob = document.querySelector("#software-job");
 const closeSoftwareButton = document.querySelector("#close-software");
+const deletePanel = document.querySelector("#delete-panel");
+const deleteServerName = document.querySelector("#delete-server-name");
+const deleteServerId = document.querySelector("#delete-server-id");
+const deleteNotice = document.querySelector("#delete-notice");
+const deleteForm = document.querySelector("#delete-form");
+const deleteConfirmId = document.querySelector("#delete-confirm-id");
+const deleteBackups = document.querySelector("#delete-backups");
+const deleteJob = document.querySelector("#delete-job");
+const closeDeleteButton = document.querySelector("#close-delete");
 const openSetupButton = document.querySelector("#open-setup");
 const setupPanel = document.querySelector("#setup-panel");
 const closeSetupButton = document.querySelector("#close-setup");
@@ -69,6 +78,7 @@ let activeConsoleServer = null;
 let consoleCursor = 0;
 let consolePollGeneration = 0;
 let activeSoftwareServer = null;
+let activeDeleteServer = null;
 
 const actionLabels = {
   start: "Start",
@@ -101,6 +111,7 @@ function showLogin() {
   fileManager.hidden = true;
   consolePanel.hidden = true;
   softwarePanel.hidden = true;
+  deletePanel.hidden = true;
   setupPanel.hidden = true;
   refreshButton.hidden = true;
   logoutButton.hidden = true;
@@ -110,11 +121,13 @@ function showLogin() {
 function showDashboard() {
   stopConsolePolling();
   activeSoftwareServer = null;
+  activeDeleteServer = null;
   loginPanel.hidden = true;
   dashboard.hidden = false;
   fileManager.hidden = true;
   consolePanel.hidden = true;
   softwarePanel.hidden = true;
+  deletePanel.hidden = true;
   setupPanel.hidden = true;
   refreshButton.hidden = false;
   logoutButton.hidden = false;
@@ -134,6 +147,7 @@ async function openSetup() {
   fileManager.hidden = true;
   consolePanel.hidden = true;
   softwarePanel.hidden = true;
+  deletePanel.hidden = true;
   setupPanel.hidden = false;
   refreshButton.hidden = true;
   openSetupButton.hidden = true;
@@ -355,6 +369,7 @@ async function openSoftwareChange(server) {
   fileManager.hidden = true;
   consolePanel.hidden = true;
   setupPanel.hidden = true;
+  deletePanel.hidden = true;
   softwarePanel.hidden = false;
   refreshButton.hidden = true;
   openSetupButton.hidden = true;
@@ -427,6 +442,62 @@ async function watchSoftwareChange(jobId) {
   } finally {
     softwareJob.hidden = true;
     softwareForm.querySelectorAll("button, input, select").forEach((node) => (node.disabled = false));
+  }
+}
+
+function showDeleteNotice(message, kind = "info") {
+  deleteNotice.textContent = message;
+  deleteNotice.className = `notice ${kind}`;
+  deleteNotice.hidden = false;
+}
+
+function openServerDeletion(server) {
+  stopConsolePolling();
+  activeDeleteServer = server;
+  loginPanel.hidden = true;
+  dashboard.hidden = true;
+  fileManager.hidden = true;
+  consolePanel.hidden = true;
+  softwarePanel.hidden = true;
+  setupPanel.hidden = true;
+  deletePanel.hidden = false;
+  refreshButton.hidden = true;
+  openSetupButton.hidden = true;
+  deleteServerName.textContent = server.name;
+  deleteServerId.textContent = server.controller_id;
+  deleteNotice.hidden = true;
+  deleteJob.hidden = true;
+  deleteForm.reset();
+  deleteConfirmId.placeholder = server.controller_id;
+  deleteConfirmId.focus();
+}
+
+async function watchServerDeletion(server, jobId) {
+  deleteJob.hidden = false;
+  deleteForm.querySelectorAll("button, input").forEach((node) => (node.disabled = true));
+  try {
+    for (;;) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+      const job = await api(
+        `/api/servers/${server.controller_id}/jobs/${encodeURIComponent(jobId)}`
+      );
+      deleteJob.querySelector(".job-text").textContent = `Server deletion: ${job.state}`;
+      if (job.state === "succeeded") {
+        let result = {};
+        try { result = JSON.parse(job.output.trim().split("\n").at(-1)); } catch {}
+        const backup = result.final_backup ? ` Final backup: ${result.final_backup}` : "";
+        showDashboard();
+        await loadServers();
+        showNotice(`${server.name} was permanently deleted.${backup}`, "success");
+        return;
+      }
+      if (job.state === "failed") throw new Error(job.error || "Server deletion failed");
+    }
+  } catch (error) {
+    showDeleteNotice(error.message, "error");
+  } finally {
+    deleteJob.hidden = true;
+    deleteForm.querySelectorAll("button, input").forEach((node) => (node.disabled = false));
   }
 }
 
@@ -518,6 +589,13 @@ function renderServer(server) {
     softwareButton.className = "warning";
     softwareButton.addEventListener("click", () => openSoftwareChange(server));
     actions.append(softwareButton);
+  }
+  if (server.server_delete_enabled) {
+    const deleteButton = document.createElement("button");
+    deleteButton.textContent = "Delete server";
+    deleteButton.className = "danger";
+    deleteButton.addEventListener("click", () => openServerDeletion(server));
+    actions.append(deleteButton);
   }
   return card;
 }
@@ -618,6 +696,7 @@ async function openFileManager(server) {
   fileManager.hidden = false;
   consolePanel.hidden = true;
   softwarePanel.hidden = true;
+  deletePanel.hidden = true;
   setupPanel.hidden = true;
   refreshButton.hidden = true;
   openSetupButton.hidden = true;
@@ -955,6 +1034,7 @@ async function openConsole(server) {
   fileManager.hidden = true;
   setupPanel.hidden = true;
   softwarePanel.hidden = true;
+  deletePanel.hidden = true;
   consolePanel.hidden = false;
   refreshButton.hidden = true;
   openSetupButton.hidden = true;
@@ -1050,6 +1130,39 @@ loadSoftwareVersionsButton.addEventListener("click", loadSoftwareVersions);
 softwareType.addEventListener("change", () => {
   softwareVersion.value = "";
   softwareVersionOptions.replaceChildren();
+});
+
+deleteForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!activeDeleteServer) return;
+  const server = activeDeleteServer;
+  if (deleteConfirmId.value !== server.controller_id) {
+    showDeleteNotice(`Type ${server.controller_id} exactly to confirm deletion.`, "error");
+    return;
+  }
+  const backupWarning = deleteBackups.checked
+    ? " All existing backups will also be permanently deleted."
+    : " A final backup will be retained.";
+  if (!window.confirm(
+    `Permanently delete ${server.name} (${server.controller_id})?${backupWarning}`
+  )) return;
+  try {
+    const job = await api(`/api/servers/${server.controller_id}/delete`, {
+      method: "POST",
+      body: JSON.stringify({
+        confirm_id: deleteConfirmId.value,
+        delete_backups: deleteBackups.checked,
+      }),
+    });
+    await watchServerDeletion(server, job.id);
+  } catch (error) {
+    showDeleteNotice(error.message, "error");
+  }
+});
+
+closeDeleteButton.addEventListener("click", async () => {
+  showDashboard();
+  await loadServers();
 });
 
 provisionForm.addEventListener("submit", async (event) => {

@@ -159,3 +159,81 @@ async def test_configured_agent_must_support_provisioning(
 
     assert response.status_code == 409
     assert response.json()["detail"] == "Agent provisioning is disabled"
+
+
+async def test_controller_deletes_only_paired_dynamic_server(
+    tmp_path: Path, monkeypatch
+) -> None:
+    agents = AsyncMock()
+    agents.info.side_effect = [
+        {
+            "id": "paper-host",
+            "name": "Paper Host",
+            "provisioning_enabled": True,
+            "servers": [
+                {"id": "managed", "name": "Managed", "track_players": False}
+            ],
+        },
+        {
+            "id": "paper-host",
+            "name": "Paper Host",
+            "provisioning_enabled": True,
+            "servers": [],
+        },
+    ]
+    agents.status.return_value = {
+        "id": "managed",
+        "name": "Managed",
+        "state": "online",
+        "actions": ["start", "stop"],
+        "scripts": ["backup"],
+        "files_enabled": True,
+        "console_enabled": True,
+        "software_change_enabled": True,
+        "server_delete_enabled": True,
+    }
+    agents.delete_server.return_value = {
+        "id": "delete-job",
+        "server_id": "managed",
+        "operation": "delete_server",
+    }
+    agents.job.return_value = {
+        "id": "delete-job",
+        "server_id": "managed",
+        "operation": "delete_server",
+        "state": "succeeded",
+        "output": '{"id":"managed","state":"deleted"}',
+    }
+    monkeypatch.setattr("mc_manager.controller.AgentClient", lambda: agents)
+    monkeypatch.setattr("mc_manager.controller.MinecraftDiscordBot", lambda *a, **k: object())
+    app = create_controller_app(onboarding_config(tmp_path))
+    app.state.discovery.observe(
+        encode_beacon("paper-host", "Paper Host", 8766), "192.168.1.126"
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post("/api/login", json={"username": "admin", "password": "password"})
+        await client.post(
+            "/api/agents/pair",
+            json={"agent_id": "paper-host", "token": "agent-token"},
+        )
+        dashboard = (await client.get("/api/servers")).json()
+        rejected = await client.post(
+            "/api/servers/managed/delete",
+            json={"confirm_id": "wrong", "delete_backups": False},
+        )
+        started = await client.post(
+            "/api/servers/managed/delete",
+            json={"confirm_id": "managed", "delete_backups": False},
+        )
+        completed = await client.get("/api/servers/managed/jobs/delete-job")
+        remaining = (await client.get("/api/servers")).json()
+
+    assert dashboard[0]["server_delete_enabled"] is True
+    assert rejected.status_code == 400
+    assert started.status_code == 200
+    assert completed.status_code == 200
+    assert remaining == []
+    agents.delete_server.assert_awaited_once()

@@ -323,6 +323,34 @@ def _software_backup(server_id: str, server_dir: Path) -> Path:
     return archive
 
 
+def _deletion_backup(server_id: str, server_dir: Path) -> Path:
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    backup_dir = BACKUP_ROOT / server_id
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    archive = backup_dir / f"{server_id}-before-delete-{timestamp}.tar.gz"
+    suffix = 1
+    while archive.exists():
+        archive = backup_dir / f"{server_id}-before-delete-{timestamp}-{suffix}.tar.gz"
+        suffix += 1
+    try:
+        with tarfile.open(archive, "w:gz") as bundle:
+            bundle.add(
+                server_dir,
+                arcname=server_id,
+                recursive=True,
+                filter=lambda member: (
+                    None
+                    if member.isfifo() or member.ischr() or member.isblk()
+                    else member
+                ),
+            )
+        os.chmod(archive, 0o640)
+    except (OSError, tarfile.TarError) as exc:
+        archive.unlink(missing_ok=True)
+        raise InstallError(f"Could not create the final server backup: {exc}") from exc
+    return archive
+
+
 def _restore_software_backup(server_id: str, server_dir: Path, archive: Path) -> None:
     failed_dir = server_dir.with_name(f".{server_id}-failed-software-change")
     suffix = 1
@@ -633,6 +661,88 @@ def change_server_software(request: dict) -> dict:
     }
 
 
+def delete_managed_server(request: dict) -> dict:
+    if os.geteuid() != 0:
+        raise InstallError("Server deletion must run as root")
+    server_id = str(request.get("id", ""))
+    confirmation = str(request.get("confirm_id", ""))
+    delete_backups = request.get("delete_backups") is True
+    if not ID_RE.fullmatch(server_id):
+        raise InstallError("Server id must use lowercase letters, numbers, '-' or '_'")
+    if confirmation != server_id:
+        raise InstallError("Server id confirmation did not match")
+
+    registry = _load_registry(REGISTRY_PATH)
+    record = next(
+        (
+            item
+            for item in registry["servers"]
+            if isinstance(item, dict) and item.get("id") == server_id
+        ),
+        None,
+    )
+    if record is None:
+        raise InstallError("Only dashboard-provisioned servers can be deleted")
+    server_dir = MINECRAFT_ROOT / server_id
+    if str(record.get("working_directory", "")) != str(server_dir):
+        raise InstallError("Managed server directory does not match the protected path")
+
+    service = f"minecraft@{server_id}.service"
+    was_active = _service_active(service)
+    _systemctl("stop", service, check=False)
+    if _service_active(service):
+        raise InstallError("The Minecraft service could not be stopped")
+
+    final_backup: Path | None = None
+    try:
+        if server_dir.is_dir() and not delete_backups:
+            final_backup = _deletion_backup(server_id, server_dir)
+    except Exception:
+        if was_active:
+            _systemctl("start", service, check=False)
+        raise
+
+    original_registry = json.loads(json.dumps(registry))
+    registry["servers"] = [
+        item
+        for item in registry["servers"]
+        if not (isinstance(item, dict) and item.get("id") == server_id)
+    ]
+    registry_written = False
+    try:
+        _write_registry(REGISTRY_PATH, registry)
+        registry_written = True
+        _systemctl("disable", service, check=False)
+        if delete_backups:
+            backup_dir = BACKUP_ROOT / server_id
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir)
+        if server_dir.exists():
+            shutil.rmtree(server_dir)
+    except Exception as exc:
+        if registry_written:
+            try:
+                _write_registry(REGISTRY_PATH, original_registry)
+            except Exception as rollback_exc:
+                raise InstallError(
+                    f"Server deletion failed ({exc}); registry rollback also failed: "
+                    f"{rollback_exc}"
+                ) from rollback_exc
+        if was_active and server_dir.is_dir():
+            _systemctl("enable", service, check=False)
+            _systemctl("start", service, check=False)
+        if isinstance(exc, InstallError):
+            raise
+        raise InstallError(f"Could not delete the server: {exc}") from exc
+
+    return {
+        "id": server_id,
+        "state": "deleted",
+        "final_backup": str(final_backup) if final_backup is not None else None,
+        "backups_deleted": delete_backups,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Provision one managed Minecraft server")
     parser.add_argument("--request", required=True, help="Validated JSON provisioning request")
@@ -660,6 +770,22 @@ def change_software_main() -> None:
         result = change_server_software(request)
     except (json.JSONDecodeError, InstallError, subprocess.SubprocessError, OSError) as exc:
         raise SystemExit(f"Software change failed: {exc}") from exc
+    print(json.dumps(result))
+
+
+def delete_server_main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Delete one dashboard-provisioned Minecraft server"
+    )
+    parser.add_argument("--request", required=True, help="Validated JSON deletion request")
+    args = parser.parse_args()
+    try:
+        request = json.loads(args.request)
+        if not isinstance(request, dict):
+            raise InstallError("Server deletion request must be a JSON object")
+        result = delete_managed_server(request)
+    except (json.JSONDecodeError, InstallError, subprocess.SubprocessError, OSError) as exc:
+        raise SystemExit(f"Server deletion failed: {exc}") from exc
     print(json.dumps(result))
 
 

@@ -94,6 +94,19 @@ class AgentClient:
             )
         return result
 
+    async def delete_server(self, server: RemoteServer, payload: dict) -> dict:
+        result = await self._request(
+            server,
+            "POST",
+            f"/v1/servers/{server.id}/delete",
+            json_body=payload,
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("id"), str):
+            raise AgentUnavailable(
+                f"{server.name}: agent returned an invalid server deletion job"
+            )
+        return result
+
     async def statuses(self, server: RemoteServer) -> dict[str, dict]:
         entries = await self._request(server, "GET", "/v1/servers")
         if not isinstance(entries, list):

@@ -108,6 +108,22 @@ def test_dashboard_assets_include_backup_first_per_server_software_change():
     assert "mc-manager-change-software" in project
 
 
+def test_dashboard_assets_include_guarded_managed_server_deletion():
+    static = ROOT / "mc_manager" / "static"
+    html = (static / "index.html").read_text()
+    javascript = (static / "app.js").read_text()
+    sudoers = (ROOT / "deploy/sudoers/minecraft-manager-provisioning").read_text()
+    project = (ROOT / "pyproject.toml").read_text()
+
+    assert 'id="delete-panel"' in html
+    assert "Delete server" in javascript
+    assert "server.server_delete_enabled" in javascript
+    assert "/api/servers/${server.controller_id}/delete" in javascript
+    assert "delete_backups" in javascript
+    assert "mc-manager-delete-server --request *" in sudoers
+    assert "mc-manager-delete-server" in project
+
+
 def test_dashboard_assets_include_scoped_files_and_minecraft_console():
     static = ROOT / "mc_manager" / "static"
     html = (static / "index.html").read_text()
@@ -138,6 +154,7 @@ def test_agent_installer_enables_safe_dashboard_provisioning():
     assert "ReadWritePaths=-/etc/systemd/system" in unit
     assert "mc-manager-provision --request *" in sudoers
     assert "mc-manager-managed-action *" in sudoers
+    assert "mc-manager-delete-server --request *" in sudoers
     assert "install -d --owner=root --group=minecraft --mode=2770 /srv/minecraft-backups" in bootstrap
 
 

@@ -92,6 +92,11 @@ class SoftwareChangeRequest(BaseModel):
     confirm_backup: bool = False
 
 
+class DeleteServerRequest(BaseModel):
+    confirm_id: str = Field(min_length=1, max_length=64)
+    delete_backups: bool = False
+
+
 class ServerRegistrationRequest(BaseModel):
     server_id: str
     source_server_id: str
@@ -714,6 +719,10 @@ def create_controller_app(
                 result["controller_id"] = server.id
                 result["name"] = server.name
                 result["managed_registration"] = server.id in registry.entries
+                result["server_delete_enabled"] = bool(
+                    result.get("server_delete_enabled", False)
+                    and server.id in dynamic_owner
+                )
                 return result
             except AgentUnavailable as exc:
                 return {
@@ -725,6 +734,7 @@ def create_controller_app(
                     "actions": [],
                     "scripts": [],
                     "managed_registration": server.id in registry.entries,
+                    "server_delete_enabled": False,
                 }
 
         return list(await asyncio.gather(*(get_status(item) for item in servers.values())))
@@ -770,6 +780,32 @@ def create_controller_app(
             )
         except AgentUnavailable as exc:
             raise agent_file_error(exc) from exc
+
+    @app.post("/api/servers/{server_id}/delete")
+    async def delete_server(
+        server_id: str, payload: DeleteServerRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        if server_id not in dynamic_owner:
+            raise HTTPException(
+                status_code=409,
+                detail="Only dashboard-provisioned servers can be deleted",
+            )
+        if payload.confirm_id != server_id:
+            raise HTTPException(status_code=400, detail="Server id confirmation did not match")
+        try:
+            result = await agents.delete_server(
+                find_server(server_id), payload.model_dump()
+            )
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+        LOG.warning(
+            "Dashboard user=%s requested full server deletion server=%s delete_backups=%s",
+            config.web_username,
+            server_id,
+            payload.delete_backups,
+        )
+        return result
 
     @app.get("/api/servers/{server_id}/files")
     async def files(server_id: str, request: Request, path: str = "") -> dict:
@@ -922,8 +958,20 @@ def create_controller_app(
     @app.get("/api/servers/{server_id}/jobs/{job_id}")
     async def job(server_id: str, job_id: str, request: Request) -> dict:
         require_login(request)
+        owner_id = dynamic_owner.get(server_id)
         try:
-            return await agents.job(find_server(server_id), job_id)
+            result = await agents.job(find_server(server_id), job_id)
+            if (
+                result.get("state") == "succeeded"
+                and result.get("operation") == "delete_server"
+                and owner_id
+            ):
+                owner = paired.get(owner_id)
+                if owner is not None:
+                    info = await agents.info(remote_for_agent(owner))
+                    sync_paired_agent(owner, info)
+                    paired.put(owner)
+            return result
         except AgentUnavailable as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 

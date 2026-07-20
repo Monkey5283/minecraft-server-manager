@@ -1,5 +1,6 @@
 import sys
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -135,6 +136,79 @@ async def test_agent_exposes_and_starts_managed_software_change(tmp_path: Path):
     assert conflicting_action.status_code == 409
     assert changed.status_code == 200
     assert changed.json()["id"] == "change-job"
+
+
+async def test_agent_exposes_and_starts_managed_server_deletion(tmp_path: Path):
+    ok_command = ((sys.executable, "-c", "print('online')"),)
+    server_root = tmp_path / "vanillaplus"
+    server_root.mkdir()
+    managed_registry = tmp_path / "managed-servers.json"
+    managed_registry.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "servers": [
+                    {
+                        "id": "vanillaplus",
+                        "working_directory": server_root.as_posix(),
+                        "software": {"type": "paper", "version": "1.21.11"},
+                    }
+                ],
+            }
+        )
+    )
+    server = AgentServer(
+        id="vanillaplus",
+        name="Vanilla Plus",
+        working_directory=server_root,
+        actions={
+            "start": ok_command,
+            "stop": ok_command,
+            "restart": ok_command,
+            "status": ok_command,
+        },
+        scripts={},
+    )
+    app = create_agent_app(
+        AgentConfig(
+            name="test-agent",
+            bind="127.0.0.1",
+            port=8766,
+            token="test-token",
+            servers=(server,),
+            provisioning_enabled=True,
+            managed_servers_file=managed_registry,
+        ),
+        config_path=tmp_path / "agent.toml",
+    )
+    app.state.runtime.start_delete_server_job = lambda selected, payload: Job(
+        id="delete-job",
+        server_id=selected.id,
+        operation="delete_server",
+    )
+    transport = httpx.ASGITransport(app=app)
+    headers = {"Authorization": "Bearer test-token"}
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        listed = await client.get("/v1/servers", headers=headers)
+        rejected = await client.post(
+            "/v1/servers/vanillaplus/delete",
+            headers=headers,
+            json={"confirm_id": "wrong", "delete_backups": False},
+        )
+        deleted = await client.post(
+            "/v1/servers/vanillaplus/delete",
+            headers=headers,
+            json={"confirm_id": "vanillaplus", "delete_backups": False},
+        )
+
+    assert listed.status_code == 200
+    assert listed.json()[0]["server_delete_enabled"] is True
+    assert rejected.status_code == 400
+    assert deleted.status_code == 200
+    assert deleted.json()["id"] == "delete-job"
 
 
 async def test_agent_exposes_authenticated_player_snapshot(tmp_path: Path, monkeypatch):

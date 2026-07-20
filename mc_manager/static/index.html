@@ -156,6 +156,28 @@
           </section>
         </section>
 
+        <section id="delete-panel" hidden>
+          <div class="delete-heading">
+            <div>
+              <p class="eyebrow danger-text">PERMANENT SERVER DELETION</p>
+              <h2 id="delete-server-name"></h2>
+            </div>
+            <button id="close-delete" class="secondary">Back to servers</button>
+          </div>
+          <div id="delete-notice" class="notice" hidden></div>
+          <section class="panel delete-card">
+            <p class="delete-warning">This stops and disables the Minecraft service, removes the managed server from the panel, and permanently deletes its server directory. A final backup is retained by default.</p>
+            <form id="delete-form" autocomplete="off">
+              <label>Type <code id="delete-server-id"></code> to confirm
+                <input id="delete-confirm-id" maxlength="64" required />
+              </label>
+              <label class="checkbox-label"><input id="delete-backups" type="checkbox" /><span>Also permanently delete every backup for this server. No final backup will be created.</span></label>
+              <button id="delete-server" class="danger" type="submit">Permanently delete server</button>
+            </form>
+            <div id="delete-job" class="job" hidden><span class="spinner"></span><span class="job-text"></span></div>
+          </section>
+        </section>
+
         <section id="setup-panel" hidden>
           <div class="setup-heading">
             <div>

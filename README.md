@@ -423,6 +423,13 @@ server has been checked in-game. This control is intentionally unavailable for
 manual `[[servers]]` entries because the agent cannot safely infer their custom
 launch and backup layout.
 
+Dashboard-provisioned servers also show **Delete server**. Deletion requires the
+exact server id to be typed, stops and disables the systemd service, removes the
+server directory and managed registry entry, and retains a final timestamped
+backup by default. An additional confirmation checkbox can permanently remove
+all backups instead. Manual `controller.toml` and `[[servers]]` entries cannot be
+deleted from the dashboard.
+
 For manually managed servers:
 
 To add another server on an existing agent:

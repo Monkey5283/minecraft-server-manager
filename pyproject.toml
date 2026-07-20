@@ -27,6 +27,7 @@ mc-manager-agent = "mc_manager.agent:main"
 mc-manager-resolve-paper = "mc_manager.paper_download:main"
 mc-manager-provision = "mc_manager.server_installer:main"
 mc-manager-change-software = "mc_manager.server_installer:change_software_main"
+mc-manager-delete-server = "mc_manager.server_installer:delete_server_main"
 mc-manager-managed-action = "mc_manager.server_installer:managed_action_main"
 
 [tool.setuptools]
