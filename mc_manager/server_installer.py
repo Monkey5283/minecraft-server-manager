@@ -3,16 +3,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import pwd
-import grp
 import re
 import shutil
 import shlex
 import subprocess
+import tarfile
 import tempfile
+import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+try:
+    import grp
+    import pwd
+except ImportError:  # pragma: no cover - Linux-only helpers are mocked on Windows
+    grp = None
+    pwd = None
 
 from .paper_download import USER_AGENT
 from .server_catalog import (
@@ -31,6 +38,9 @@ VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,95}$")
 MEMORY_RE = re.compile(r"^[1-9][0-9]{0,5}[MG]$")
 SERVER_TYPES = frozenset({"vanilla", "paper", "forge", "neoforge"})
 MAX_SERVER_DOWNLOAD = 1024 * 1024 * 1024
+MINECRAFT_ROOT = Path("/srv/minecraft")
+BACKUP_ROOT = Path("/srv/minecraft-backups")
+REGISTRY_PATH = MINECRAFT_ROOT / ".manager" / "managed-servers.json"
 
 
 class InstallError(RuntimeError):
@@ -126,6 +136,11 @@ def _server_record(
     name: str,
     port: int,
     server_type: str,
+    *,
+    version: str,
+    java_path: str,
+    minimum_memory: str,
+    maximum_memory: str,
 ) -> dict:
     service = f"minecraft@{server_id}.service"
     managed_action = "/opt/minecraft-manager/venv/bin/mc-manager-managed-action"
@@ -163,7 +178,184 @@ def _server_record(
         "scripts": {
             "backup": [["sudo", "-n", managed_action, "backup", server_id]]
         },
+        "software": {
+            "type": server_type,
+            "version": version,
+            "java_path": java_path,
+            "minimum_memory": minimum_memory,
+            "maximum_memory": maximum_memory,
+        },
     }
+
+
+def _stage_software(
+    staging: Path,
+    server_type: str,
+    spec: DownloadSpec,
+    java: Path,
+    minimum_memory: str,
+    maximum_memory: str,
+) -> None:
+    if server_type in {"vanilla", "paper"}:
+        _download(spec, staging / "server.jar")
+    else:
+        installer = staging / f"{server_type}-installer.jar"
+        _download(spec, installer)
+        try:
+            completed = subprocess.run(
+                [str(java), "-jar", str(installer), "--installServer"],
+                cwd=staging,
+                capture_output=True,
+                text=True,
+                timeout=1800,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise InstallError(f"Could not run the {server_type} installer: {exc}") from exc
+        if completed.returncode != 0:
+            detail = (completed.stdout + completed.stderr)[-4000:]
+            raise InstallError(f"{server_type} installer failed:\n{detail}")
+        installer.unlink(missing_ok=True)
+
+    if server_type in {"forge", "neoforge"} and not (staging / "run.sh").exists():
+        jars = sorted(
+            path
+            for path in staging.glob("*.jar")
+            if "installer" not in path.name and "shim" not in path.name
+        )
+        if not jars:
+            raise InstallError(f"{server_type} installer did not create a runnable server")
+        shutil.copy2(jars[-1], staging / "server.jar")
+
+    if (staging / "run.sh").exists():
+        os.chmod(staging / "run.sh", 0o750)
+        launch = "#!/usr/bin/env bash\nset -euo pipefail\nexec ./run.sh nogui\n"
+        _write(
+            staging / "user_jvm_args.txt",
+            f"-Xms{minimum_memory}\n-Xmx{maximum_memory}\n",
+            0o640,
+        )
+    else:
+        launch = (
+            "#!/usr/bin/env bash\nset -euo pipefail\n"
+            f'exec {shlex.quote(str(java))} -Xms{minimum_memory} -Xmx{maximum_memory} '
+            "-jar server.jar nogui\n"
+        )
+    _write(staging / "start-server", launch, 0o750)
+
+
+def _minecraft_identity() -> tuple[int, int]:
+    if pwd is None or grp is None:
+        raise InstallError("Minecraft identity lookup is only available on Linux")
+    try:
+        minecraft_user = pwd.getpwnam("minecraft")
+        minecraft_group = grp.getgrnam("minecraft")
+    except KeyError as exc:
+        raise InstallError(
+            "The minecraft service account is missing; rerun the agent installer"
+        ) from exc
+    return minecraft_user.pw_uid, minecraft_group.gr_gid
+
+
+def _chown_tree(root: Path, uid: int, gid: int) -> None:
+    for current_root, directories, files in os.walk(root):
+        os.chown(current_root, uid, gid)
+        os.chmod(current_root, 0o2770)
+        for item in directories + files:
+            path = Path(current_root) / item
+            if path.is_symlink() and hasattr(os, "lchown"):
+                os.lchown(path, uid, gid)
+            else:
+                os.chown(path, uid, gid)
+
+
+def _write_registry(path: Path, registry: dict) -> None:
+    _write(path, json.dumps(registry, indent=2) + "\n", 0o640)
+    if grp is None:
+        return
+    try:
+        os.chown(path, 0, grp.getgrnam("mcmanager").gr_gid)
+    except KeyError:
+        pass
+
+
+def _systemctl(action: str, service: str, *, check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["/usr/bin/systemctl", action, service],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=check,
+    )
+
+
+def _service_active(service: str) -> bool:
+    return _systemctl("is-active", service, check=False).returncode == 0
+
+
+def _software_backup(server_id: str, server_dir: Path) -> Path:
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    backup_dir = BACKUP_ROOT / server_id
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    archive = backup_dir / f"{server_id}-before-software-change-{timestamp}.tar.gz"
+    suffix = 1
+    while archive.exists():
+        archive = backup_dir / (
+            f"{server_id}-before-software-change-{timestamp}-{suffix}.tar.gz"
+        )
+        suffix += 1
+    try:
+        with tarfile.open(archive, "w:gz") as bundle:
+            bundle.add(
+                server_dir,
+                arcname=server_id,
+                recursive=True,
+                filter=lambda member: (
+                    None
+                    if member.isfifo() or member.ischr() or member.isblk()
+                    else member
+                ),
+            )
+        os.chmod(archive, 0o640)
+    except (OSError, tarfile.TarError) as exc:
+        archive.unlink(missing_ok=True)
+        raise InstallError(f"Could not create the pre-change backup: {exc}") from exc
+    return archive
+
+
+def _restore_software_backup(server_id: str, server_dir: Path, archive: Path) -> None:
+    failed_dir = server_dir.with_name(f".{server_id}-failed-software-change")
+    suffix = 1
+    while failed_dir.exists():
+        failed_dir = server_dir.with_name(
+            f".{server_id}-failed-software-change-{suffix}"
+        )
+        suffix += 1
+    server_dir.replace(failed_dir)
+    try:
+        with tarfile.open(archive, "r:gz") as bundle:
+            members = bundle.getmembers()
+            prefix = f"{server_id}/"
+            if any(
+                member.name != server_id
+                and not member.name.startswith(prefix)
+                for member in members
+            ):
+                raise InstallError("Pre-change backup contained an invalid path")
+            bundle.extractall(MINECRAFT_ROOT, filter="data")
+    except Exception:
+        if server_dir.exists():
+            shutil.rmtree(server_dir, ignore_errors=True)
+        if failed_dir.exists():
+            failed_dir.replace(server_dir)
+        raise
+    minecraft_uid, minecraft_gid = _minecraft_identity()
+    _chown_tree(server_dir, minecraft_uid, minecraft_gid)
+    protected_update_environment = server_dir / ".manager-update.env"
+    if protected_update_environment.is_file():
+        os.chown(protected_update_environment, 0, 0)
+        os.chmod(protected_update_environment, 0o600)
+    shutil.rmtree(failed_dir)
 
 
 def install_server(request: dict) -> dict:
@@ -194,7 +386,7 @@ def install_server(request: dict) -> dict:
     if request.get("accept_eula") is not True:
         raise InstallError("The Minecraft EULA must be accepted before installation")
 
-    registry_path = Path("/srv/minecraft/.manager/managed-servers.json")
+    registry_path = REGISTRY_PATH
     registry = _load_registry(registry_path)
     if any(item.get("id") == server_id for item in registry["servers"]):
         raise InstallError(f"Server id already exists: {server_id}")
@@ -205,62 +397,25 @@ def install_server(request: dict) -> dict:
         if isinstance(item, dict)
     ):
         raise InstallError(f"Server port is already assigned: {port}")
-    final_dir = Path("/srv/minecraft") / server_id
+    final_dir = MINECRAFT_ROOT / server_id
     if final_dir.exists():
         raise InstallError(f"Server directory already exists: {final_dir}")
 
     spec = _resolve(server_type, version)
     java = _validate_java(java_path, spec.java_major)
-    Path("/srv/minecraft").mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{server_id}-install-", dir="/srv/minecraft"))
+    MINECRAFT_ROOT.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{server_id}-install-", dir=MINECRAFT_ROOT))
     final_created = False
     registry_written = False
     try:
-        if server_type in {"vanilla", "paper"}:
-            _download(spec, staging / "server.jar")
-        else:
-            installer = staging / f"{server_type}-installer.jar"
-            _download(spec, installer)
-            try:
-                completed = subprocess.run(
-                    [str(java), "-jar", str(installer), "--installServer"],
-                    cwd=staging,
-                    capture_output=True,
-                    text=True,
-                    timeout=1800,
-                    check=False,
-                )
-            except (OSError, subprocess.SubprocessError) as exc:
-                raise InstallError(f"Could not run the {server_type} installer: {exc}") from exc
-            if completed.returncode != 0:
-                detail = (completed.stdout + completed.stderr)[-4000:]
-                raise InstallError(f"{server_type} installer failed:\n{detail}")
-            installer.unlink(missing_ok=True)
-
-        if server_type in {"forge", "neoforge"} and not (staging / "run.sh").exists():
-            jars = sorted(
-                path for path in staging.glob("*.jar")
-                if "installer" not in path.name and "shim" not in path.name
-            )
-            if not jars:
-                raise InstallError(f"{server_type} installer did not create a runnable server")
-            shutil.copy2(jars[-1], staging / "server.jar")
-
-        if (staging / "run.sh").exists():
-            os.chmod(staging / "run.sh", 0o750)
-            launch = "#!/usr/bin/env bash\nset -euo pipefail\nexec ./run.sh nogui\n"
-            _write(
-                staging / "user_jvm_args.txt",
-                f"-Xms{minimum_memory}\n-Xmx{maximum_memory}\n",
-                0o640,
-            )
-        else:
-            launch = (
-                "#!/usr/bin/env bash\nset -euo pipefail\n"
-                f'exec {shlex.quote(str(java))} -Xms{minimum_memory} -Xmx{maximum_memory} '
-                "-jar server.jar nogui\n"
-            )
-        _write(staging / "start-server", launch, 0o750)
+        _stage_software(
+            staging,
+            server_type,
+            spec,
+            java,
+            minimum_memory,
+            maximum_memory,
+        )
         _write(staging / "eula.txt", "eula=true\n", 0o640)
         _write(
             staging / "server.properties",
@@ -270,18 +425,8 @@ def install_server(request: dict) -> dict:
         staging.replace(final_dir)
         final_created = True
 
-        try:
-            minecraft_user = pwd.getpwnam("minecraft")
-            minecraft_group = grp.getgrnam("minecraft")
-        except KeyError as exc:
-            raise InstallError(
-                "The minecraft service account is missing; rerun the agent installer"
-            ) from exc
-        for root, directories, files in os.walk(final_dir):
-            os.chown(root, minecraft_user.pw_uid, minecraft_group.gr_gid)
-            os.chmod(root, 0o2770)
-            for item in directories + files:
-                os.chown(Path(root) / item, minecraft_user.pw_uid, minecraft_group.gr_gid)
+        minecraft_uid, minecraft_gid = _minecraft_identity()
+        _chown_tree(final_dir, minecraft_uid, minecraft_gid)
 
         if server_type == "paper":
             _write(
@@ -301,13 +446,20 @@ def install_server(request: dict) -> dict:
             ["/usr/bin/systemctl", "enable", f"minecraft@{server_id}.service"],
             check=True,
         )
-        registry["servers"].append(_server_record(server_id, name, port, server_type))
-        _write(registry_path, json.dumps(registry, indent=2) + "\n", 0o640)
+        registry["servers"].append(
+            _server_record(
+                server_id,
+                name,
+                port,
+                server_type,
+                version=version,
+                java_path=str(java),
+                minimum_memory=minimum_memory,
+                maximum_memory=maximum_memory,
+            )
+        )
+        _write_registry(registry_path, registry)
         registry_written = True
-        try:
-            os.chown(registry_path, 0, grp.getgrnam("mcmanager").gr_gid)
-        except KeyError:
-            pass
     except Exception:
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
@@ -324,7 +476,7 @@ def install_server(request: dict) -> dict:
                 item for item in registry["servers"] if item.get("id") != server_id
             ]
             try:
-                _write(registry_path, json.dumps(registry, indent=2) + "\n", 0o640)
+                _write_registry(registry_path, registry)
             except OSError:
                 pass
         raise
@@ -339,6 +491,148 @@ def install_server(request: dict) -> dict:
     }
 
 
+def change_server_software(request: dict) -> dict:
+    if os.geteuid() != 0:
+        raise InstallError("Changing server software must run as root")
+    server_id = str(request.get("id", ""))
+    server_type = str(request.get("type", ""))
+    version = str(request.get("version", ""))
+    minimum_memory = str(request.get("minimum_memory", "1G")).upper()
+    maximum_memory = str(request.get("maximum_memory", "4G")).upper()
+    java_path = str(request.get("java_path", "/usr/bin/java"))
+    if not ID_RE.fullmatch(server_id):
+        raise InstallError("Server id must use lowercase letters, numbers, '-' or '_'")
+    if server_type not in SERVER_TYPES:
+        raise InstallError("Unsupported server type")
+    if not VERSION_RE.fullmatch(version):
+        raise InstallError("Server version has an invalid format")
+    if not MEMORY_RE.fullmatch(minimum_memory) or not MEMORY_RE.fullmatch(maximum_memory):
+        raise InstallError("Memory values must look like 1G, 4096M, or similar")
+    if _memory_megabytes(minimum_memory) > _memory_megabytes(maximum_memory):
+        raise InstallError("Minimum memory cannot be greater than maximum memory")
+    if request.get("accept_eula") is not True:
+        raise InstallError("The Minecraft EULA must be accepted before installation")
+    if request.get("confirm_backup") is not True:
+        raise InstallError("The backup and restart confirmation is required")
+
+    registry = _load_registry(REGISTRY_PATH)
+    record = next(
+        (
+            item
+            for item in registry["servers"]
+            if isinstance(item, dict) and item.get("id") == server_id
+        ),
+        None,
+    )
+    if record is None:
+        raise InstallError(
+            "Only servers provisioned by the dashboard can change software"
+        )
+    server_dir = MINECRAFT_ROOT / server_id
+    if not server_dir.is_dir():
+        raise InstallError(f"Server directory does not exist: {server_dir}")
+
+    spec = _resolve(server_type, version)
+    java = _validate_java(java_path, spec.java_major)
+    MINECRAFT_ROOT.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{server_id}-software-", dir=MINECRAFT_ROOT)
+    )
+    service = f"minecraft@{server_id}.service"
+    original_registry = json.loads(json.dumps(registry))
+    backup: Path | None = None
+    was_active = False
+    changed = False
+    try:
+        _stage_software(
+            staging,
+            server_type,
+            spec,
+            java,
+            minimum_memory,
+            maximum_memory,
+        )
+        minecraft_uid, minecraft_gid = _minecraft_identity()
+        _chown_tree(staging, minecraft_uid, minecraft_gid)
+
+        was_active = _service_active(service)
+        _systemctl("stop", service)
+        backup = _software_backup(server_id, server_dir)
+
+        changed = True
+        shutil.copytree(staging, server_dir, dirs_exist_ok=True)
+        update_environment = server_dir / ".manager-update.env"
+        if server_type == "paper":
+            _write(
+                update_environment,
+                (
+                    "UPDATE_PROVIDER=paper\n"
+                    f"PAPER_VERSION={version}\n"
+                    f"SERVER_DIR={server_dir}\n"
+                    "JAR_NAME=server.jar\n"
+                    f"SERVICE_NAME={service}\n"
+                ),
+                0o600,
+            )
+        else:
+            update_environment.unlink(missing_ok=True)
+
+        actions = dict(record.get("actions", {}))
+        managed_action = "/opt/minecraft-manager/venv/bin/mc-manager-managed-action"
+        if server_type == "paper":
+            actions["update"] = [[
+                "sudo", "-n", managed_action, "update", server_id
+            ]]
+        else:
+            actions.pop("update", None)
+        record["actions"] = actions
+        record["software"] = {
+            "type": server_type,
+            "version": version,
+            "java_path": str(java),
+            "minimum_memory": minimum_memory,
+            "maximum_memory": maximum_memory,
+        }
+        _write_registry(REGISTRY_PATH, registry)
+
+        if was_active:
+            _systemctl("start", service)
+            time.sleep(8)
+            if not _service_active(service):
+                raise InstallError(
+                    "The changed server did not stay running; restoring its backup"
+                )
+    except Exception as exc:
+        if backup is not None and changed:
+            try:
+                _systemctl("stop", service, check=False)
+                _restore_software_backup(server_id, server_dir, backup)
+                _write_registry(REGISTRY_PATH, original_registry)
+                if was_active:
+                    _systemctl("start", service)
+            except Exception as rollback_exc:
+                raise InstallError(
+                    f"Software change failed ({exc}); automatic rollback also failed: "
+                    f"{rollback_exc}. Backup: {backup}"
+                ) from rollback_exc
+        elif was_active:
+            _systemctl("start", service, check=False)
+        if isinstance(exc, InstallError):
+            raise
+        raise InstallError(f"Could not change server software: {exc}") from exc
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+    return {
+        "id": server_id,
+        "type": server_type,
+        "version": version,
+        "backup": str(backup),
+        "state": "changed",
+        "restarted": was_active,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Provision one managed Minecraft server")
     parser.add_argument("--request", required=True, help="Validated JSON provisioning request")
@@ -350,6 +644,22 @@ def main() -> None:
         result = install_server(request)
     except (json.JSONDecodeError, InstallError, subprocess.SubprocessError, OSError) as exc:
         raise SystemExit(f"Provisioning failed: {exc}") from exc
+    print(json.dumps(result))
+
+
+def change_software_main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Change software for one dashboard-provisioned Minecraft server"
+    )
+    parser.add_argument("--request", required=True, help="Validated JSON change request")
+    args = parser.parse_args()
+    try:
+        request = json.loads(args.request)
+        if not isinstance(request, dict):
+            raise InstallError("Software change request must be a JSON object")
+        result = change_server_software(request)
+    except (json.JSONDecodeError, InstallError, subprocess.SubprocessError, OSError) as exc:
+        raise SystemExit(f"Software change failed: {exc}") from exc
     print(json.dumps(result))
 
 

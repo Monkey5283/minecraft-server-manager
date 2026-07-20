@@ -404,6 +404,20 @@ For provisioned agents, click **Add server** in the dashboard and select an
 already-paired host. Each installation needs a globally unique server id and
 appears in the panel as soon as its installation job completes.
 
+Dashboard-provisioned servers also show **Change software/version** on their
+server card. The workflow supports Vanilla, Paper, Forge, and NeoForge. It
+downloads and verifies the selected release before downtime, stops the server,
+creates a full archive under `/srv/minecraft-backups/SERVER_ID`, preserves the
+existing world and configuration, changes the runtime, and restarts servers
+that were previously running. If the new runtime exits during its startup
+check, the agent restores the archive and previous registry entry automatically.
+
+Downgrading a world or moving between mod loaders can still make the selected
+software reject existing world or mod data. Keep the generated backup until the
+server has been checked in-game. This control is intentionally unavailable for
+manual `[[servers]]` entries because the agent cannot safely infer their custom
+launch and backup layout.
+
 For manually managed servers:
 
 To add another server on an existing agent:

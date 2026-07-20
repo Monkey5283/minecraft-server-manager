@@ -1,4 +1,5 @@
 # The helper validates every field, confines installs to /srv/minecraft, verifies
 # publisher checksums, and creates only minecraft@.service instances.
 mcmanager ALL=(root) NOPASSWD: /opt/minecraft-manager/venv/bin/mc-manager-provision --request *
+mcmanager ALL=(root) NOPASSWD: /opt/minecraft-manager/venv/bin/mc-manager-change-software --request *
 mcmanager ALL=(root) NOPASSWD: /opt/minecraft-manager/venv/bin/mc-manager-managed-action *

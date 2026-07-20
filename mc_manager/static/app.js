@@ -34,6 +34,17 @@ const consoleOutput = document.querySelector("#console-output");
 const consoleForm = document.querySelector("#console-form");
 const consoleCommand = document.querySelector("#console-command");
 const closeConsoleButton = document.querySelector("#close-console");
+const softwarePanel = document.querySelector("#software-panel");
+const softwareServerName = document.querySelector("#software-server-name");
+const softwareNotice = document.querySelector("#software-notice");
+const currentSoftware = document.querySelector("#current-software");
+const softwareForm = document.querySelector("#software-form");
+const softwareType = document.querySelector("#software-type");
+const softwareVersion = document.querySelector("#software-version");
+const softwareVersionOptions = document.querySelector("#software-version-options");
+const loadSoftwareVersionsButton = document.querySelector("#load-software-versions");
+const softwareJob = document.querySelector("#software-job");
+const closeSoftwareButton = document.querySelector("#close-software");
 const openSetupButton = document.querySelector("#open-setup");
 const setupPanel = document.querySelector("#setup-panel");
 const closeSetupButton = document.querySelector("#close-setup");
@@ -56,6 +67,7 @@ let openDocument = null;
 let activeConsoleServer = null;
 let consoleCursor = 0;
 let consolePollGeneration = 0;
+let activeSoftwareServer = null;
 
 const actionLabels = {
   start: "Start",
@@ -87,6 +99,7 @@ function showLogin() {
   dashboard.hidden = true;
   fileManager.hidden = true;
   consolePanel.hidden = true;
+  softwarePanel.hidden = true;
   setupPanel.hidden = true;
   refreshButton.hidden = true;
   logoutButton.hidden = true;
@@ -95,10 +108,12 @@ function showLogin() {
 
 function showDashboard() {
   stopConsolePolling();
+  activeSoftwareServer = null;
   loginPanel.hidden = true;
   dashboard.hidden = false;
   fileManager.hidden = true;
   consolePanel.hidden = true;
+  softwarePanel.hidden = true;
   setupPanel.hidden = true;
   refreshButton.hidden = false;
   logoutButton.hidden = false;
@@ -117,6 +132,7 @@ async function openSetup() {
   dashboard.hidden = true;
   fileManager.hidden = true;
   consolePanel.hidden = true;
+  softwarePanel.hidden = true;
   setupPanel.hidden = false;
   refreshButton.hidden = true;
   openSetupButton.hidden = true;
@@ -267,6 +283,101 @@ async function watchProvisionJob(agentId, jobId) {
   }
 }
 
+function showSoftwareNotice(message, kind = "info") {
+  softwareNotice.textContent = message;
+  softwareNotice.className = `notice ${kind}`;
+  softwareNotice.hidden = false;
+}
+
+function describeSoftware(software) {
+  if (!software || !software.type) return "Current software: unknown (choose the desired replacement below).";
+  const label = software.type === "paper" ? "PaperMC" :
+    software.type.charAt(0).toUpperCase() + software.type.slice(1);
+  return `Current software: ${label}${software.version ? ` ${software.version}` : ""}.`;
+}
+
+async function openSoftwareChange(server) {
+  stopConsolePolling();
+  activeSoftwareServer = server;
+  dashboard.hidden = true;
+  fileManager.hidden = true;
+  consolePanel.hidden = true;
+  setupPanel.hidden = true;
+  softwarePanel.hidden = false;
+  refreshButton.hidden = true;
+  openSetupButton.hidden = true;
+  softwareServerName.textContent = server.name;
+  currentSoftware.textContent = describeSoftware(server.software);
+  softwareNotice.hidden = true;
+  softwareJob.hidden = true;
+  softwareForm.reset();
+  softwareVersionOptions.replaceChildren();
+  const current = server.software || {};
+  softwareType.value = ["paper", "vanilla", "forge", "neoforge"].includes(current.type)
+    ? current.type
+    : "paper";
+  softwareVersion.value = current.version || "";
+  document.querySelector("#software-java-path").value = current.java_path || "/usr/bin/java";
+  document.querySelector("#software-minimum-memory").value = current.minimum_memory || "1G";
+  document.querySelector("#software-maximum-memory").value = current.maximum_memory || "4G";
+}
+
+async function loadSoftwareVersions() {
+  if (!activeSoftwareServer) return;
+  loadSoftwareVersionsButton.disabled = true;
+  softwareVersion.value = "";
+  softwareVersion.placeholder = "Loading publisher catalog…";
+  softwareVersionOptions.replaceChildren();
+  try {
+    const catalog = await api(
+      `/api/servers/${activeSoftwareServer.controller_id}/catalog/${encodeURIComponent(softwareType.value)}`
+    );
+    softwareVersion.placeholder = "Choose or enter a version";
+    for (const version of catalog.versions) {
+      const option = document.createElement("option");
+      option.value = version.id;
+      option.label = version.label;
+      softwareVersionOptions.append(option);
+    }
+  } catch (error) {
+    softwareVersion.placeholder = "Enter an exact version";
+    showSoftwareNotice(error.message, "error");
+  } finally {
+    loadSoftwareVersionsButton.disabled = false;
+  }
+}
+
+async function watchSoftwareChange(jobId) {
+  softwareJob.hidden = false;
+  softwareForm.querySelectorAll("button, input, select").forEach((node) => (node.disabled = true));
+  try {
+    for (;;) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+      const job = await api(
+        `/api/servers/${activeSoftwareServer.controller_id}/jobs/${encodeURIComponent(jobId)}`
+      );
+      softwareJob.querySelector(".job-text").textContent = `Software change: ${job.state}`;
+      if (job.state === "succeeded") {
+        let result = {};
+        try { result = JSON.parse(job.output.trim().split("\n").at(-1)); } catch {}
+        const backup = result.backup ? ` Backup: ${result.backup}` : "";
+        showSoftwareNotice(`Software changed successfully.${backup}`, "success");
+        currentSoftware.textContent = describeSoftware({
+          type: softwareType.value,
+          version: softwareVersion.value,
+        });
+        return;
+      }
+      if (job.state === "failed") throw new Error(job.error || "Software change failed");
+    }
+  } catch (error) {
+    showSoftwareNotice(error.message, "error");
+  } finally {
+    softwareJob.hidden = true;
+    softwareForm.querySelectorAll("button, input, select").forEach((node) => (node.disabled = false));
+  }
+}
+
 function showNotice(message, kind = "info") {
   notice.textContent = message;
   notice.className = `notice ${kind}`;
@@ -348,6 +459,13 @@ function renderServer(server) {
     consoleButton.className = "secondary";
     consoleButton.addEventListener("click", () => openConsole(server));
     actions.append(consoleButton);
+  }
+  if (server.software_change_enabled) {
+    const softwareButton = document.createElement("button");
+    softwareButton.textContent = "Change software/version";
+    softwareButton.className = "warning";
+    softwareButton.addEventListener("click", () => openSoftwareChange(server));
+    actions.append(softwareButton);
   }
   return card;
 }
@@ -447,6 +565,8 @@ async function openFileManager(server) {
   loginPanel.hidden = true;
   fileManager.hidden = false;
   consolePanel.hidden = true;
+  softwarePanel.hidden = true;
+  setupPanel.hidden = true;
   refreshButton.hidden = true;
   openSetupButton.hidden = true;
   await loadDirectory("");
@@ -782,6 +902,7 @@ async function openConsole(server) {
   dashboard.hidden = true;
   fileManager.hidden = true;
   setupPanel.hidden = true;
+  softwarePanel.hidden = true;
   consolePanel.hidden = false;
   refreshButton.hidden = true;
   openSetupButton.hidden = true;
@@ -838,6 +959,45 @@ consoleForm.addEventListener("submit", async (event) => {
 closeConsoleButton.addEventListener("click", async () => {
   showDashboard();
   await loadServers();
+});
+
+softwareForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!activeSoftwareServer || !softwareVersion.value) {
+    showSoftwareNotice("Choose or enter a server version.", "error");
+    return;
+  }
+  if (!window.confirm(
+    `Back up, stop, and change ${activeSoftwareServer.name} to ${softwareType.value} ${softwareVersion.value}?`
+  )) return;
+  const payload = {
+    type: softwareType.value,
+    version: softwareVersion.value,
+    java_path: document.querySelector("#software-java-path").value,
+    minimum_memory: document.querySelector("#software-minimum-memory").value.toUpperCase(),
+    maximum_memory: document.querySelector("#software-maximum-memory").value.toUpperCase(),
+    accept_eula: document.querySelector("#software-accept-eula").checked,
+    confirm_backup: document.querySelector("#software-confirm-backup").checked,
+  };
+  try {
+    const job = await api(
+      `/api/servers/${activeSoftwareServer.controller_id}/software`,
+      { method: "POST", body: JSON.stringify(payload) }
+    );
+    await watchSoftwareChange(job.id);
+  } catch (error) {
+    showSoftwareNotice(error.message, "error");
+  }
+});
+
+closeSoftwareButton.addEventListener("click", async () => {
+  showDashboard();
+  await loadServers();
+});
+loadSoftwareVersionsButton.addEventListener("click", loadSoftwareVersions);
+softwareType.addEventListener("change", () => {
+  softwareVersion.value = "";
+  softwareVersionOptions.replaceChildren();
 });
 
 provisionForm.addEventListener("submit", async (event) => {

@@ -78,6 +78,16 @@ class ProvisionServerRequest(BaseModel):
     accept_eula: bool = False
 
 
+class SoftwareChangeRequest(BaseModel):
+    type: str
+    version: str
+    minimum_memory: str = "1G"
+    maximum_memory: str = "4G"
+    java_path: str = "/usr/bin/java"
+    accept_eula: bool = False
+    confirm_backup: bool = False
+
+
 class ServerRegistrationRequest(BaseModel):
     server_id: str
     source_server_id: str
@@ -675,6 +685,30 @@ def create_controller_app(
             return await agents.script(find_server(server_id), script_name)
         except AgentUnavailable as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/servers/{server_id}/catalog/{server_type}")
+    async def server_catalog(
+        server_id: str, server_type: str, request: Request
+    ) -> dict:
+        require_login(request)
+        try:
+            return await agents.catalog(find_server(server_id), server_type)
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/api/servers/{server_id}/software")
+    async def change_server_software(
+        server_id: str,
+        payload: SoftwareChangeRequest,
+        request: Request,
+    ) -> dict:
+        require_login(request)
+        try:
+            return await agents.change_software(
+                find_server(server_id), payload.model_dump()
+            )
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
 
     @app.get("/api/servers/{server_id}/files")
     async def files(server_id: str, request: Request, path: str = "") -> dict:

@@ -210,3 +210,46 @@ async def test_controller_preserves_safe_agent_file_conflict_status(monkeypatch)
 
     assert response.status_code == 409
     assert "changed on disk" in response.json()["detail"]
+
+
+async def test_controller_proxies_per_server_software_catalog_and_change(monkeypatch):
+    agents = AsyncMock()
+    agents.catalog.return_value = {
+        "type": "paper",
+        "versions": [{"id": "1.21.11", "label": "1.21.11"}],
+    }
+    agents.change_software.return_value = {
+        "id": "change-job",
+        "server_id": "survival",
+        "operation": "change_software",
+        "state": "queued",
+    }
+    monkeypatch.setattr("mc_manager.controller.AgentClient", lambda: agents)
+    monkeypatch.setattr("mc_manager.controller.MinecraftDiscordBot", lambda *a, **k: object())
+    app = create_controller_app(controller_config())
+    transport = httpx.ASGITransport(app=app)
+    payload = {
+        "type": "paper",
+        "version": "1.21.11",
+        "minimum_memory": "2G",
+        "maximum_memory": "6G",
+        "java_path": "/usr/bin/java",
+        "accept_eula": True,
+        "confirm_backup": True,
+    }
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        assert (
+            await client.post("/api/servers/survival/software", json=payload)
+        ).status_code == 401
+        await client.post(
+            "/api/login", json={"username": "admin", "password": "password"}
+        )
+        catalog = await client.get("/api/servers/survival/catalog/paper")
+        changed = await client.post("/api/servers/survival/software", json=payload)
+
+    assert catalog.status_code == 200
+    assert changed.status_code == 200
+    server = controller_config().servers[0]
+    agents.catalog.assert_awaited_once_with(server, "paper")
+    agents.change_software.assert_awaited_once_with(server, payload)

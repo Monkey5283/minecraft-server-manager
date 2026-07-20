@@ -81,6 +81,19 @@ class AgentClient:
             raise AgentUnavailable(f"{server.name}: agent returned an invalid install job")
         return result
 
+    async def change_software(self, server: RemoteServer, payload: dict) -> dict:
+        result = await self._request(
+            server,
+            "POST",
+            f"/v1/servers/{server.id}/software",
+            json_body=payload,
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("id"), str):
+            raise AgentUnavailable(
+                f"{server.name}: agent returned an invalid software change job"
+            )
+        return result
+
     async def statuses(self, server: RemoteServer) -> dict[str, dict]:
         entries = await self._request(server, "GET", "/v1/servers")
         if not isinstance(entries, list):

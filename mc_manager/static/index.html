@@ -114,6 +114,48 @@
           </section>
         </section>
 
+        <section id="software-panel" hidden>
+          <div class="software-heading">
+            <div>
+              <p class="eyebrow">SERVER SOFTWARE</p>
+              <h2 id="software-server-name"></h2>
+            </div>
+            <button id="close-software" class="secondary">Back to servers</button>
+          </div>
+          <div id="software-notice" class="notice" hidden></div>
+          <section class="panel software-card">
+            <p id="current-software" class="muted"></p>
+            <p class="software-warning">The agent downloads and verifies the selected release first, stops the server, creates a full backup, changes the runtime, and restarts it. If the new runtime does not stay running, the previous server is restored automatically.</p>
+            <form id="software-form">
+              <label>Server software
+                <select id="software-type" required>
+                  <option value="paper">PaperMC</option>
+                  <option value="vanilla">Vanilla</option>
+                  <option value="forge">Forge</option>
+                  <option value="neoforge">NeoForge</option>
+                </select>
+              </label>
+              <label>Version
+                <div class="inline-field">
+                  <input id="software-version" list="software-version-options" placeholder="Load or enter an exact version" required />
+                  <datalist id="software-version-options"></datalist>
+                  <button id="load-software-versions" type="button" class="secondary">Load versions</button>
+                </div>
+              </label>
+              <div class="two-column-fields">
+                <label>Java executable<input id="software-java-path" value="/usr/bin/java" required /></label>
+                <span></span>
+                <label>Minimum memory<input id="software-minimum-memory" value="1G" pattern="[1-9][0-9]{0,5}[MGmg]" required /></label>
+                <label>Maximum memory<input id="software-maximum-memory" value="4G" pattern="[1-9][0-9]{0,5}[MGmg]" required /></label>
+              </div>
+              <label class="checkbox-label"><input id="software-accept-eula" type="checkbox" required /><span>I agree to the <a href="https://www.minecraft.net/eula" target="_blank" rel="noreferrer">Minecraft EULA</a>.</span></label>
+              <label class="checkbox-label"><input id="software-confirm-backup" type="checkbox" required /><span>I understand the server will stop and a full pre-change backup will be retained.</span></label>
+              <button id="change-software" class="warning" type="submit">Back up &amp; change software</button>
+            </form>
+            <div id="software-job" class="job" hidden><span class="spinner"></span><span class="job-text"></span></div>
+          </section>
+        </section>
+
         <section id="setup-panel" hidden>
           <div class="setup-heading">
             <div>
@@ -159,7 +201,7 @@
                   <label>Minimum memory<input id="minimum-memory" value="1G" pattern="[1-9][0-9]{0,5}[MGmg]" required /></label>
                   <label>Maximum memory<input id="maximum-memory" value="4G" pattern="[1-9][0-9]{0,5}[MGmg]" required /></label>
                 </div>
-                <label class="checkbox-label"><input id="accept-eula" type="checkbox" required /> I agree to the <a href="https://www.minecraft.net/eula" target="_blank" rel="noreferrer">Minecraft EULA</a>.</label>
+                <label class="checkbox-label"><input id="accept-eula" type="checkbox" required /><span>I agree to the <a href="https://www.minecraft.net/eula" target="_blank" rel="noreferrer">Minecraft EULA</a>.</span></label>
                 <button id="install-server" type="submit">Install server</button>
               </form>
               <div id="provision-job" class="job" hidden><span class="spinner"></span><span class="job-text"></span></div>
