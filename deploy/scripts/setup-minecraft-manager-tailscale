@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: sudo setup-minecraft-manager-tailscale [--hostname NAME] [--port PORT] [--skip-install]
+
+Installs and connects Tailscale when needed, then privately publishes the
+Minecraft Manager dashboard with Tailscale Serve. The default dashboard target
+is http://127.0.0.1:8080 and the default Tailscale device name is
+minecraft-manager.
+EOF
+  exit 2
+}
+
+[[ $EUID -eq 0 ]] || {
+  echo "run this setup as root" >&2
+  exit 1
+}
+
+hostname="${MC_MANAGER_TAILSCALE_HOSTNAME:-minecraft-manager}"
+dashboard_port="${MC_MANAGER_DASHBOARD_PORT:-8080}"
+controller_config="${MC_CONTROLLER_CONFIG:-/etc/minecraft-manager/controller.toml}"
+skip_install=false
+
+while (( $# > 0 )); do
+  case "$1" in
+    --hostname)
+      (( $# >= 2 )) || usage
+      hostname="$2"
+      shift 2
+      ;;
+    --port)
+      (( $# >= 2 )) || usage
+      dashboard_port="$2"
+      shift 2
+      ;;
+    --skip-install)
+      skip_install=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+[[ "$hostname" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || {
+  echo "hostname must be a valid DNS label of at most 63 characters" >&2
+  exit 2
+}
+[[ "$dashboard_port" =~ ^[0-9]+$ ]] &&
+  (( dashboard_port >= 1 && dashboard_port <= 65535 )) || {
+  echo "port must be an integer from 1 through 65535" >&2
+  exit 2
+}
+[[ -r "$controller_config" ]] || {
+  echo "missing controller configuration: $controller_config" >&2
+  exit 1
+}
+
+config_security="$(python3 - "$controller_config" "$dashboard_port" <<'PY'
+import pathlib
+import sys
+import tomllib
+
+path = pathlib.Path(sys.argv[1])
+expected_port = int(sys.argv[2])
+with path.open("rb") as config_file:
+    config = tomllib.load(config_file)
+
+controller = config.get("controller", {})
+auth = config.get("auth", {})
+if controller.get("bind") != "127.0.0.1":
+    raise SystemExit(
+        "controller.bind must be 127.0.0.1 before enabling Tailscale Serve"
+    )
+if controller.get("port") != expected_port:
+    raise SystemExit(
+        f"controller.port is {controller.get('port')!r}, but setup targets {expected_port}; "
+        "pass --port with the configured value"
+    )
+print("secure" if auth.get("cookie_secure") is True else "insecure")
+PY
+)"
+
+if [[ "$config_security" == "insecure" ]]; then
+  secure_setting_count="$(grep -Ec \
+    '^[[:space:]]*cookie_secure[[:space:]]*=[[:space:]]*false([[:space:]]*(#.*)?)?$' \
+    "$controller_config" || true)"
+  [[ "$secure_setting_count" == "1" ]] || {
+    echo "auth.cookie_secure must be explicitly set to true in $controller_config" >&2
+    exit 1
+  }
+  config_backup="${controller_config}.pre-tailscale"
+  if [[ ! -e "$config_backup" ]]; then
+    cp --preserve=mode,ownership,timestamps -- "$controller_config" "$config_backup"
+  fi
+  sed -E -i \
+    's/^([[:space:]]*cookie_secure[[:space:]]*=[[:space:]]*)false([[:space:]]*(#.*)?)$/\1true\2/' \
+    "$controller_config"
+  echo "Enabled secure dashboard cookies (backup: $config_backup)."
+  if systemctl is-active --quiet mc-manager-controller.service; then
+    systemctl restart mc-manager-controller.service
+  fi
+fi
+
+if ! command -v tailscale >/dev/null 2>&1; then
+  [[ "$skip_install" == false ]] || {
+    echo "tailscale is not installed and --skip-install was specified" >&2
+    exit 1
+  }
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install --yes ca-certificates curl
+  install_script="$(mktemp)"
+  cleanup() {
+    rm -f -- "$install_script"
+  }
+  trap cleanup EXIT
+  curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+    https://tailscale.com/install.sh --output "$install_script"
+  sh "$install_script"
+fi
+
+systemctl enable --now tailscaled.service
+
+if tailscale ip -4 >/dev/null 2>&1; then
+  tailscale set --hostname="$hostname"
+else
+  echo "Authenticate this controller with the URL Tailscale prints below."
+  tailscale up --hostname="$hostname"
+fi
+
+tailscale ip -4 >/dev/null 2>&1 || {
+  echo "Tailscale did not connect; run 'sudo tailscale up' and retry" >&2
+  exit 1
+}
+
+python3 - "$dashboard_port" <<'PY'
+import sys
+import urllib.error
+import urllib.request
+
+url = f"http://127.0.0.1:{int(sys.argv[1])}/api/session"
+try:
+    with urllib.request.urlopen(url, timeout=5) as response:
+        if response.status != 200:
+            raise RuntimeError(f"unexpected HTTP status {response.status}")
+except (OSError, RuntimeError, urllib.error.URLError) as exc:
+    raise SystemExit(
+        f"Minecraft Manager is not responding at {url}: {exc}. "
+        "Start mc-manager-controller.service, then retry."
+    ) from exc
+PY
+
+tailscale serve --bg --yes "http://127.0.0.1:${dashboard_port}"
+
+echo
+echo "Minecraft Manager is available privately at:"
+tailscale serve status
+echo
+echo "Tailscale Serve persists across reboots. Do not enable Tailscale Funnel."
