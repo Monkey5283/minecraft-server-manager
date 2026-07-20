@@ -26,6 +26,15 @@ root = "/srv/minecraft/survival"
 max_edit_size_bytes = 2097152
 max_upload_size_bytes = 33554432
 
+# Optional live Minecraft command console. This is not an operating-system shell.
+# Use deploy/scripts/start-minecraft-server so the named input pipe is created.
+[servers.console]
+enabled = true
+input_pipe = ".manager/console.in"
+log_file = "logs/latest.log"
+max_command_bytes = 1024
+max_output_bytes = 262144
+
 # Every entry is an argv array (or a list of argv arrays). No shell is used.
 [servers.actions]
 start = [["sudo", "-n", "/usr/bin/systemctl", "start", "minecraft@survival.service"]]

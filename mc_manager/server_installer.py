@@ -152,6 +152,13 @@ def _server_record(
             "max_edit_size_bytes": 2097152,
             "max_upload_size_bytes": 134217728,
         },
+        "console": {
+            "enabled": True,
+            "input_pipe": f"/srv/minecraft/{server_id}/.manager/console.in",
+            "log_file": f"/srv/minecraft/{server_id}/logs/latest.log",
+            "max_command_bytes": 1024,
+            "max_output_bytes": 262144,
+        },
         "actions": actions,
         "scripts": {
             "backup": [["sudo", "-n", managed_action, "backup", server_id]]
@@ -272,6 +279,7 @@ def install_server(request: dict) -> dict:
             ) from exc
         for root, directories, files in os.walk(final_dir):
             os.chown(root, minecraft_user.pw_uid, minecraft_group.gr_gid)
+            os.chmod(root, 0o2770)
             for item in directories + files:
                 os.chown(Path(root) / item, minecraft_user.pw_uid, minecraft_group.gr_gid)
 

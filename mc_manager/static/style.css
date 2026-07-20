@@ -136,7 +136,7 @@ textarea {
   width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--green);
   border-radius: 50%; animation: spin .7s linear infinite;
 }
-.file-manager-heading, .file-toolbar, .editor-heading, .editor-footer {
+.file-manager-heading, .file-toolbar, .editor-heading, .editor-footer, .console-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -160,7 +160,7 @@ textarea {
 .file-browser, .file-editor { padding: 0; overflow: hidden; }
 .file-list-heading, .file-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 110px minmax(170px, 220px) 100px;
+  grid-template-columns: minmax(220px, 1fr) 110px minmax(170px, 220px) 170px;
   align-items: center;
   gap: 12px;
   min-height: 48px;
@@ -200,8 +200,9 @@ textarea {
   color: var(--muted);
   opacity: .65;
 }
-.file-entry-actions { display: flex; justify-content: flex-end; }
+.file-entry-actions, .editor-actions { display: flex; justify-content: flex-end; gap: 7px; }
 .file-download { padding: 7px 10px; font-size: .75rem; }
+.file-delete { padding: 7px 10px; font-size: .75rem; }
 .empty-state {
   margin: 0;
   padding: 28px 16px;
@@ -217,13 +218,32 @@ textarea {
 }
 .file-editor textarea { min-height: 52vh; padding: 14px; }
 .editor-footer { margin-top: 12px; color: var(--muted); font-size: .8rem; }
+.console-heading { margin-bottom: 20px; }
+.console-card { display: grid; gap: 14px; }
+.console-warning { margin: 0; color: #f2c66d; font-size: .82rem; }
+#console-output {
+  min-height: 55vh;
+  max-height: 68vh;
+  margin: 0;
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: #d7e2dc;
+  background: #070b09;
+  font: .82rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#console-form { display: grid; gap: 7px; }
+.console-command-row { display: grid; grid-template-columns: 1fr auto; gap: 9px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 650px) {
   header { align-items: flex-start; flex-direction: column; padding: 28px 0; }
   .header-actions { flex-wrap: wrap; }
   .scripts { grid-template-columns: 1fr; }
-  .file-manager-heading, .file-toolbar, .editor-footer {
+  .file-manager-heading, .file-toolbar, .editor-footer, .console-heading {
     align-items: stretch;
     flex-direction: column;
   }
@@ -234,6 +254,8 @@ textarea {
   .file-size { grid-column: 1; }
   .file-modified { grid-column: 1 / -1; font-size: .72rem; }
   .file-entry-actions { grid-column: 2; grid-row: 1 / 3; }
+  .editor-actions { flex-wrap: wrap; }
+  .console-command-row { grid-template-columns: 1fr; }
   .setup-heading { align-items: stretch; flex-direction: column; }
   .setup-grid, .two-column-fields { grid-template-columns: 1fr; }
   .pair-controls, .inline-field { grid-template-columns: 1fr; }

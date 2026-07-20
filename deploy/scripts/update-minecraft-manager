@@ -106,6 +106,35 @@ else
     "$SOURCE_DIR/deploy/sudoers/minecraft-manager-provisioning" \
     /etc/sudoers.d/minecraft-manager-provisioning
   visudo -cf /etc/sudoers.d/minecraft-manager-provisioning
+  "$VENV_DIR/bin/python" - <<'PY'
+import grp
+import json
+import os
+import re
+import stat
+from pathlib import Path
+
+registry_path = Path("/srv/minecraft/.manager/managed-servers.json")
+try:
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+    payload = {"servers": []}
+try:
+    minecraft_gid = grp.getgrnam("minecraft").gr_gid
+except KeyError:
+    minecraft_gid = -1
+for entry in payload.get("servers", []):
+    server_id = str(entry.get("id", "")) if isinstance(entry, dict) else ""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", server_id):
+        continue
+    server_root = Path("/srv/minecraft") / server_id
+    if not server_root.is_dir():
+        continue
+    current_mode = stat.S_IMODE(server_root.stat().st_mode)
+    os.chmod(server_root, current_mode | stat.S_ISGID | stat.S_IRWXG)
+    if minecraft_gid >= 0:
+        os.chown(server_root, -1, minecraft_gid)
+PY
 fi
 
 systemctl daemon-reload

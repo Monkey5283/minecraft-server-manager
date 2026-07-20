@@ -89,6 +89,23 @@ def test_dashboard_assets_include_lan_onboarding_and_provisioning():
     assert "/catalog/" in javascript
 
 
+def test_dashboard_assets_include_scoped_files_and_minecraft_console():
+    static = ROOT / "mc_manager" / "static"
+    html = (static / "index.html").read_text()
+    javascript = (static / "app.js").read_text()
+    launcher = (ROOT / "deploy/scripts/start-minecraft-server").read_text()
+    installer = (ROOT / "mc_manager/server_installer.py").read_text()
+
+    assert 'id="save-and-restart"' in html
+    assert 'id="console-panel"' in html
+    assert "Minecraft server commands only" in html
+    assert 'method: "DELETE"' in javascript
+    assert "server.console_enabled" in javascript
+    assert 'exec 3<>"$console_pipe"' in launcher
+    assert "mkfifo -m 0660" in launcher
+    assert '"input_pipe": f"/srv/minecraft/{server_id}/.manager/console.in"' in installer
+
+
 def test_agent_installer_enables_safe_dashboard_provisioning():
     bootstrap = (ROOT / "deploy/scripts/bootstrap-minecraft-manager").read_text()
     unit = (ROOT / "deploy/systemd/mc-manager-agent.service").read_text()

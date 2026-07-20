@@ -193,6 +193,37 @@ class AgentClient:
         assert isinstance(result, dict)
         return result
 
+    async def delete_file(self, server: RemoteServer, path: str) -> dict:
+        result = await self._request(
+            server,
+            "DELETE",
+            f"/v1/servers/{server.id}/files",
+            params={"path": path},
+        )
+        assert isinstance(result, dict)
+        return result
+
+    async def console_output(self, server: RemoteServer, cursor: int = 0) -> dict:
+        result = await self._request(
+            server,
+            "GET",
+            f"/v1/servers/{server.id}/console",
+            params={"cursor": cursor},
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("content"), str):
+            raise AgentUnavailable(f"{server.name}: agent returned invalid console output")
+        return result
+
+    async def console_command(self, server: RemoteServer, command: str) -> dict:
+        result = await self._request(
+            server,
+            "POST",
+            f"/v1/servers/{server.id}/console",
+            json_body={"command": command},
+        )
+        assert isinstance(result, dict)
+        return result
+
     async def upload_file(
         self,
         server: RemoteServer,

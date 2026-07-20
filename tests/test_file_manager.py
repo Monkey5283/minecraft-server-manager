@@ -102,6 +102,29 @@ def test_file_manager_detects_conflicts_and_controls_upload_overwrite(tmp_path: 
     assert (root / "mods" / "readme.txt").read_text(encoding="utf-8") == "new file\n"
 
 
+def test_file_manager_deletes_only_files_and_empty_directories(tmp_path: Path):
+    root = tmp_path / "server"
+    root.mkdir()
+    manager = ServerFileManager(FileManagerConfig(root=root))
+    (root / "delete.txt").write_text("remove me", encoding="utf-8")
+    (root / "empty").mkdir()
+    (root / "world").mkdir()
+    (root / "world" / "level.dat").write_bytes(b"world")
+
+    assert manager.delete("delete.txt") == {
+        "path": "delete.txt",
+        "kind": "file",
+        "deleted": True,
+    }
+    assert manager.delete("empty")["kind"] == "directory"
+    with pytest.raises(FileConflict, match="not empty"):
+        manager.delete("world")
+    with pytest.raises(InvalidFilePath):
+        manager.delete("../outside")
+    with pytest.raises(InvalidFilePath, match="unsupported characters"):
+        manager.delete("bad\nname")
+
+
 async def test_agent_file_api_is_authenticated_scoped_and_conflict_safe(tmp_path: Path):
     ok_command = ((sys.executable, "-c", "print('online')"),)
     root = tmp_path / "server"
@@ -138,6 +161,12 @@ async def test_agent_file_api_is_authenticated_scoped_and_conflict_safe(tmp_path
         assert (
             await client.get(
                 "/v1/servers/survival/files/download",
+                params={"path": "binary.dat"},
+            )
+        ).status_code == 401
+        assert (
+            await client.delete(
+                "/v1/servers/survival/files",
                 params={"path": "binary.dat"},
             )
         ).status_code == 401
@@ -227,7 +256,14 @@ async def test_agent_file_api_is_authenticated_scoped_and_conflict_safe(tmp_path
         )
         assert uploaded.status_code == 200
 
-    assert (root / "plugins" / "example.jar").read_bytes() == b"jar bytes"
+        deleted = await client.delete(
+            "/v1/servers/survival/files",
+            params={"path": "plugins/example.jar"},
+            headers=headers,
+        )
+        assert deleted.status_code == 200
+
+    assert not (root / "plugins" / "example.jar").exists()
 
 
 async def test_agent_file_api_is_explicitly_opt_in(tmp_path: Path):

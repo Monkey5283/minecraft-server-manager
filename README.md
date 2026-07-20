@@ -24,7 +24,8 @@ domain. Routed VLANs require a UDP relay or manual TOML configuration.
 - Manage multiple servers across multiple Linux hosts
 - Control access through Discord users, roles, or administrators
 - Use a password-protected web dashboard
-- Optionally browse, edit, upload, and download server files from the dashboard
+- Optionally browse, edit, upload, download, and delete server files
+- Run Minecraft commands from a live, per-server web console
 - Optionally track Paper players and server transfers
 - Discover newly installed agents automatically on the local network
 - Pair agents and install Vanilla, Paper, Forge, or NeoForge from the dashboard
@@ -432,10 +433,11 @@ The repository includes examples for more advanced installations:
 Only enable the features you need, and grant the `mcmanager` account only the
 exact commands and directories required by those features.
 
-### Dashboard file downloads
+### Dashboard files and Minecraft console
 
-File downloads use the same opt-in file-manager root as browsing, editing, and
-uploads. Add this inside each `[[servers]]` block that should expose files:
+File downloads and destructive file operations use the same opt-in file-manager
+root as browsing, editing, and uploads. Add this inside each `[[servers]]` block
+that should expose files:
 
 ```toml
 [servers.file_manager]
@@ -445,8 +447,32 @@ max_edit_size_bytes = 2097152
 max_upload_size_bytes = 33554432
 ```
 
+To enable the Minecraft command console for a manually configured server, use
+the supplied `start-minecraft-server` launcher and add:
+
+```toml
+[servers.console]
+enabled = true
+input_pipe = ".manager/console.in"
+log_file = "logs/latest.log"
+max_command_bytes = 1024
+max_output_bytes = 262144
+```
+
 Restart that host's agent after changing the configuration. The dashboard's
-**Manage files** screen then shows a **Download** button beside every file.
+**Manage files** screen supports atomic saves, uploads, downloads, deletion of
+files or empty directories, and an explicit server restart to apply changed
+configuration. Saving a file changes it immediately; Minecraft configuration,
+plugin, and mod changes commonly require the server restart button before they
+take effect.
+
+The **Open console** screen tails `logs/latest.log` and sends single-line
+Minecraft commands through a server-owned named pipe. It deliberately cannot
+execute Linux commands. Console and file routes require both the authenticated
+dashboard session and the agent bearer token, paths stay inside the configured
+server root, and console audit logs record the command verb and a fingerprint
+without recording potentially sensitive arguments.
+
 Downloads require an authenticated dashboard session, remain confined to the
 configured root, support binary and large files, and stream through the Pi
 instead of being loaded completely into its memory. Directories are not

@@ -69,6 +69,8 @@ managed_servers_file = {str(managed)!r}
 
     assert loaded.provisioning_enabled is True
     assert loaded.servers[0].id == "paper"
+    assert loaded.servers[0].console is not None
+    assert loaded.servers[0].console.log_file == (tmp_path / "paper/logs/latest.log").resolve()
 
 
 def test_agent_loads_opt_in_file_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -87,6 +89,10 @@ enabled = true
 root = "."
 max_edit_size_bytes = 4096
 max_upload_size_bytes = 8192
+[servers.console]
+enabled = true
+input_pipe = ".manager/console.in"
+log_file = "logs/latest.log"
 [servers.actions]
 start = ["service", "start"]
 stop = ["service", "stop"]
@@ -103,6 +109,38 @@ status = ["service", "status"]
     assert files.root == server_root.resolve()
     assert files.max_edit_size_bytes == 4096
     assert files.max_upload_size_bytes == 8192
+    assert loaded.servers[0].console is not None
+    assert loaded.servers[0].console.input_pipe == (server_root / ".manager/console.in").resolve()
+
+
+def test_agent_rejects_console_paths_outside_server_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("TEST_AGENT_TOKEN", "secret")
+    server_root = tmp_path / "server"
+    config = tmp_path / "agent.toml"
+    config.write_text(
+        f'''
+[agent]
+token_env = "TEST_AGENT_TOKEN"
+[[servers]]
+id = "survival"
+working_directory = {str(server_root)!r}
+[servers.console]
+enabled = true
+input_pipe = "../outside/console.in"
+log_file = "logs/latest.log"
+[servers.actions]
+start = ["service", "start"]
+stop = ["service", "stop"]
+restart = ["service", "restart"]
+status = ["service", "status"]
+''',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="must stay inside working_directory"):
+        load_agent_config(config)
 
 
 def test_agent_rejects_unsafe_file_manager_limits(

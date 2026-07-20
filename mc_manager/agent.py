@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import hmac
 import json
 import logging
@@ -17,7 +18,7 @@ from urllib.parse import quote
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from .config import AgentConfig, AgentServer, ConfigError, load_agent_config
@@ -25,6 +26,7 @@ from .discovery import advertise_agent
 from .file_manager import FileManagerError, ServerFileManager
 from .minecraft_query import MinecraftQueryError, query_players
 from .server_catalog import CatalogError, list_versions
+from .server_console import ServerConsole, ServerConsoleError
 
 
 LOG = logging.getLogger("mc_manager.agent")
@@ -40,6 +42,10 @@ class FileWriteRequest(BaseModel):
 
 class DirectoryCreateRequest(BaseModel):
     path: str
+
+
+class ConsoleCommandRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=4096)
 
 
 class ProvisionRequest(BaseModel):
@@ -88,6 +94,11 @@ class AgentRuntime:
             for server in config.servers
             if server.file_manager is not None
         }
+        self.consoles = {
+            server.id: ServerConsole(server.console)
+            for server in config.servers
+            if server.console is not None
+        }
         self.jobs: OrderedDict[str, Job] = OrderedDict()
 
     def replace_config(self, config: AgentConfig) -> None:
@@ -101,6 +112,11 @@ class AgentRuntime:
             server.id: ServerFileManager(server.file_manager)
             for server in config.servers
             if server.file_manager is not None
+        }
+        self.consoles = {
+            server.id: ServerConsole(server.console)
+            for server in config.servers
+            if server.console is not None
         }
 
     async def execute_steps(
@@ -270,7 +286,20 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
             )
         return server, manager
 
+    def find_console(server_id: str) -> tuple[AgentServer, ServerConsole]:
+        server = find_server(server_id)
+        console = runtime.consoles.get(server_id)
+        if console is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Minecraft console is not enabled for this server",
+            )
+        return server, console
+
     def file_error(exc: FileManagerError) -> HTTPException:
+        return HTTPException(status_code=exc.status_code, detail=str(exc))
+
+    def console_error(exc: ServerConsoleError) -> HTTPException:
         return HTTPException(status_code=exc.status_code, detail=str(exc))
 
     @app.get("/v1/health")
@@ -345,6 +374,7 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
                     "actions": sorted(server.actions.keys() - {"status"}),
                     "scripts": sorted(server.scripts.keys()),
                     "files_enabled": server.file_manager is not None,
+                    "console_enabled": server.console is not None,
                     "player_tracking_available": server.player_query is not None,
                 }
             )
@@ -468,6 +498,52 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
             except FileManagerError as exc:
                 raise file_error(exc) from exc
         LOG.info("Uploaded managed file %s:%s", server.id, result["path"])
+        return result
+
+    @app.delete(
+        "/v1/servers/{server_id}/files",
+        dependencies=[Depends(authenticate)],
+    )
+    async def delete_file(server_id: str, path: str) -> dict:
+        server, manager = find_file_manager(server_id)
+        if runtime.locks[server.id].locked():
+            raise HTTPException(status_code=409, detail="Server maintenance is in progress")
+        async with runtime.locks[server.id]:
+            try:
+                result = manager.delete(path)
+            except FileManagerError as exc:
+                raise file_error(exc) from exc
+        LOG.warning("Deleted managed %s %s:%s", result["kind"], server.id, result["path"])
+        return result
+
+    @app.get(
+        "/v1/servers/{server_id}/console",
+        dependencies=[Depends(authenticate)],
+    )
+    async def console_output(server_id: str, cursor: int = 0) -> dict:
+        _, console = find_console(server_id)
+        try:
+            return await asyncio.to_thread(console.read_output, cursor)
+        except ServerConsoleError as exc:
+            raise console_error(exc) from exc
+
+    @app.post(
+        "/v1/servers/{server_id}/console",
+        dependencies=[Depends(authenticate)],
+    )
+    async def console_command(server_id: str, payload: ConsoleCommandRequest) -> dict:
+        server, console = find_console(server_id)
+        try:
+            result = await asyncio.to_thread(console.send_command, payload.command)
+        except ServerConsoleError as exc:
+            raise console_error(exc) from exc
+        fingerprint = hashlib.sha256(payload.command.encode("utf-8")).hexdigest()[:12]
+        LOG.warning(
+            "Accepted Minecraft console command server=%s verb=%s fingerprint=%s",
+            server.id,
+            result["command"],
+            fingerprint,
+        )
         return result
 
     @app.get(

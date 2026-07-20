@@ -57,6 +57,17 @@ async def test_controller_file_routes_require_dashboard_login_and_proxy_operatio
         "version": "version-two",
     }
     agents.create_directory.return_value = {"path": "plugins", "created": True}
+    agents.delete_file.return_value = {
+        "path": "plugins/old.jar",
+        "kind": "file",
+        "deleted": True,
+    }
+    agents.console_output.return_value = {
+        "content": "Done\n",
+        "cursor": 5,
+        "reset": True,
+    }
+    agents.console_command.return_value = {"accepted": True, "command": "list"}
     agents.upload_file.return_value = {
         "path": "plugins/example.jar",
         "size": 9,
@@ -83,6 +94,12 @@ async def test_controller_file_routes_require_dashboard_login_and_proxy_operatio
         )
         assert unauthorized_download.status_code == 401
         agents.download_file.assert_not_awaited()
+        assert (await client.get("/api/servers/survival/console", params={"cursor": 0})).status_code == 401
+        assert (
+            await client.post(
+                "/api/servers/survival/console", json={"command": "list"}
+            )
+        ).status_code == 401
 
         logged_in = await client.post(
             "/api/login", json={"username": "admin", "password": "password"}
@@ -136,6 +153,21 @@ async def test_controller_file_routes_require_dashboard_login_and_proxy_operatio
         )
         assert uploaded.status_code == 200
 
+        deleted = await client.delete(
+            "/api/servers/survival/files",
+            params={"path": "plugins/old.jar"},
+        )
+        assert deleted.status_code == 200
+
+        console = await client.get(
+            "/api/servers/survival/console", params={"cursor": 0}
+        )
+        assert console.json()["content"] == "Done\n"
+        command = await client.post(
+            "/api/servers/survival/console", json={"command": "list"}
+        )
+        assert command.status_code == 200
+
     server = controller_config().servers[0]
     agents.files.assert_awaited_once_with(server, "plugins")
     agents.file_content.assert_awaited_once_with(server, "server.properties")
@@ -144,6 +176,9 @@ async def test_controller_file_routes_require_dashboard_login_and_proxy_operatio
         server, "server.properties", "motd=Updated\n", "version-one"
     )
     agents.create_directory.assert_awaited_once_with(server, "plugins")
+    agents.delete_file.assert_awaited_once_with(server, "plugins/old.jar")
+    agents.console_output.assert_awaited_once_with(server, 0)
+    agents.console_command.assert_awaited_once_with(server, "list")
     agents.upload_file.assert_awaited_once_with(
         server, "plugins/example.jar", b"jar bytes", overwrite=True
     )

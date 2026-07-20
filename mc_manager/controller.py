@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import hmac
 import logging
 import os
@@ -14,7 +15,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -54,6 +55,10 @@ class FileWriteRequest(BaseModel):
 
 class DirectoryCreateRequest(BaseModel):
     path: str
+
+
+class ConsoleCommandRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=4096)
 
 
 class PairAgentRequest(BaseModel):
@@ -741,6 +746,52 @@ def create_controller_app(
             return await agents.create_directory(find_server(server_id), payload.path)
         except AgentUnavailable as exc:
             raise agent_file_error(exc) from exc
+
+    @app.delete("/api/servers/{server_id}/files")
+    async def delete_file(server_id: str, path: str, request: Request) -> dict:
+        require_login(request)
+        try:
+            result = await agents.delete_file(find_server(server_id), path)
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+        LOG.warning(
+            "Dashboard user=%s deleted server path server=%s path=%s",
+            config.web_username,
+            server_id,
+            result.get("path", path),
+        )
+        return result
+
+    @app.get("/api/servers/{server_id}/console")
+    async def console_output(server_id: str, cursor: int, request: Request) -> dict:
+        require_login(request)
+        try:
+            return await agents.console_output(find_server(server_id), cursor)
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+    @app.post("/api/servers/{server_id}/console")
+    async def console_command(
+        server_id: str, payload: ConsoleCommandRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        try:
+            result = await agents.console_command(
+                find_server(server_id), payload.command
+            )
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+        normalized = payload.command.lstrip().lstrip("/").lstrip()
+        verb = normalized.split(maxsplit=1)[0] if normalized else "invalid"
+        fingerprint = hashlib.sha256(payload.command.encode("utf-8")).hexdigest()[:12]
+        LOG.warning(
+            "Dashboard Minecraft console command user=%s server=%s verb=%s fingerprint=%s",
+            config.web_username,
+            server_id,
+            verb,
+            fingerprint,
+        )
+        return result
 
     @app.put("/api/servers/{server_id}/files/upload")
     async def upload_file(

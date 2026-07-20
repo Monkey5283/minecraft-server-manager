@@ -84,6 +84,14 @@ class FileManagerConfig:
 
 
 @dataclass(frozen=True)
+class ConsoleConfig:
+    input_pipe: Path
+    log_file: Path
+    max_command_bytes: int = 1024
+    max_output_bytes: int = 256 * 1024
+
+
+@dataclass(frozen=True)
 class AgentServer:
     id: str
     name: str
@@ -94,6 +102,7 @@ class AgentServer:
     update_timeout_seconds: int = 1800
     player_query: PlayerQueryConfig | None = None
     file_manager: FileManagerConfig | None = None
+    console: ConsoleConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -206,7 +215,19 @@ def load_agent_config(path: str | Path) -> AgentConfig:
             raise ConfigError(
                 f"Invalid managed server registry {managed_servers_file}: servers must be a list"
             )
-        raw_servers.extend(managed_entries)
+        for managed_entry in managed_entries:
+            if not isinstance(managed_entry, dict):
+                raw_servers.append(managed_entry)
+                continue
+            normalized_entry = dict(managed_entry)
+            working_directory = str(normalized_entry.get("working_directory", ""))
+            if "console" not in normalized_entry and working_directory:
+                normalized_entry["console"] = {
+                    "enabled": True,
+                    "input_pipe": f"{working_directory}/.manager/console.in",
+                    "log_file": f"{working_directory}/logs/latest.log",
+                }
+            raw_servers.append(normalized_entry)
 
     servers: list[AgentServer] = []
     seen: set[str] = set()
@@ -305,6 +326,48 @@ def load_agent_config(path: str | Path) -> AgentConfig:
                 timeout_seconds=query_timeout,
                 offline_status_codes=tuple(raw_offline_codes),
             )
+        raw_console = raw.get("console")
+        console = None
+        if raw_console is not None:
+            if not isinstance(raw_console, dict):
+                raise ConfigError(f"{server_id}.console must be a table")
+            if bool(raw_console.get("enabled", False)):
+                raw_pipe = Path(str(raw_console.get("input_pipe", ".manager/console.in")))
+                raw_log = Path(str(raw_console.get("log_file", "logs/latest.log")))
+                console_pipe = (
+                    raw_pipe if raw_pipe.is_absolute() else working_directory / raw_pipe
+                ).resolve()
+                console_log = (
+                    raw_log if raw_log.is_absolute() else working_directory / raw_log
+                ).resolve()
+                for console_path, label in (
+                    (console_pipe, "input_pipe"),
+                    (console_log, "log_file"),
+                ):
+                    try:
+                        console_path.relative_to(working_directory)
+                    except ValueError as exc:
+                        raise ConfigError(
+                            f"{server_id}.console.{label} must stay inside working_directory"
+                        ) from exc
+                max_command_bytes = int(raw_console.get("max_command_bytes", 1024))
+                max_output_bytes = int(
+                    raw_console.get("max_output_bytes", 256 * 1024)
+                )
+                if not 64 <= max_command_bytes <= 4096:
+                    raise ConfigError(
+                        f"{server_id}.console.max_command_bytes must be between 64 and 4096"
+                    )
+                if not 4096 <= max_output_bytes <= 1024 * 1024:
+                    raise ConfigError(
+                        f"{server_id}.console.max_output_bytes must be between 4096 and 1048576"
+                    )
+                console = ConsoleConfig(
+                    input_pipe=console_pipe,
+                    log_file=console_log,
+                    max_command_bytes=max_command_bytes,
+                    max_output_bytes=max_output_bytes,
+                )
         servers.append(
             AgentServer(
                 id=server_id,
@@ -316,6 +379,7 @@ def load_agent_config(path: str | Path) -> AgentConfig:
                 update_timeout_seconds=int(raw.get("update_timeout_seconds", 1800)),
                 player_query=player_query,
                 file_manager=file_manager,
+                console=console,
             )
         )
     provisioning_enabled = bool(provisioning.get("enabled", False))

@@ -52,6 +52,7 @@
           <div class="file-toolbar">
             <nav id="file-breadcrumbs" class="breadcrumbs" aria-label="Current directory"></nav>
             <div class="file-actions">
+              <button id="restart-from-files" class="warning">Restart server</button>
               <button id="new-file" class="secondary">New file</button>
               <button id="new-folder" class="secondary">New folder</button>
               <button id="upload-file">Upload</button>
@@ -82,10 +83,35 @@
               <textarea id="editor-content" spellcheck="false" aria-label="File content"></textarea>
               <div class="editor-footer">
                 <span id="editor-status"></span>
-                <button id="save-file">Save changes</button>
+                <div class="editor-actions">
+                  <button id="save-and-restart" class="warning">Save &amp; restart</button>
+                  <button id="save-file">Save changes</button>
+                </div>
               </div>
             </aside>
           </div>
+        </section>
+
+        <section id="console-panel" hidden>
+          <div class="console-heading">
+            <div>
+              <p class="eyebrow">MINECRAFT CONSOLE</p>
+              <h2 id="console-server-name"></h2>
+            </div>
+            <button id="close-console" class="secondary">Back to servers</button>
+          </div>
+          <div id="console-notice" class="notice" hidden></div>
+          <section class="panel console-card">
+            <p class="console-warning">Minecraft server commands only. This is intentionally not a Linux shell and cannot run operating-system commands.</p>
+            <pre id="console-output" tabindex="0" aria-live="polite" aria-label="Minecraft server console output"></pre>
+            <form id="console-form" autocomplete="off">
+              <label for="console-command">Command</label>
+              <div class="console-command-row">
+                <input id="console-command" maxlength="1024" placeholder="say Server maintenance starts in 5 minutes" required />
+                <button type="submit">Send</button>
+              </div>
+            </form>
+          </section>
         </section>
 
         <section id="setup-panel" hidden>
