@@ -73,6 +73,45 @@ managed_servers_file = {str(managed)!r}
     assert loaded.servers[0].console.log_file == (tmp_path / "paper/logs/latest.log").resolve()
 
 
+def test_standard_legacy_server_gets_console_and_deletion_tombstone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("TEST_AGENT_TOKEN", "secret")
+    managed = tmp_path / "managed.json"
+    managed.write_text('{"version":1,"servers":[]}', encoding="utf-8")
+    config = tmp_path / "agent.toml"
+    config.write_text(
+        f'''[agent]
+token_env = "TEST_AGENT_TOKEN"
+[provisioning]
+enabled = true
+managed_servers_file = {str(managed)!r}
+[[servers]]
+id = "vanillaplus"
+working_directory = "/srv/minecraft/vanillaplus"
+[servers.actions]
+start = [["sudo", "-n", "/usr/bin/systemctl", "start", "minecraft@vanillaplus.service"]]
+stop = [["sudo", "-n", "/usr/bin/systemctl", "stop", "minecraft@vanillaplus.service"]]
+restart = [["sudo", "-n", "/usr/bin/systemctl", "restart", "minecraft@vanillaplus.service"]]
+status = [["/usr/bin/systemctl", "is-active", "--quiet", "minecraft@vanillaplus.service"]]
+''',
+        encoding="utf-8",
+    )
+
+    loaded = load_agent_config(config)
+
+    assert loaded.servers[0].console is not None
+    assert loaded.servers[0].console.input_pipe.as_posix().endswith(
+        "/srv/minecraft/vanillaplus/.manager/console.in"
+    )
+
+    managed.write_text(
+        '{"version":1,"servers":[],"deleted_legacy_servers":["vanillaplus"]}',
+        encoding="utf-8",
+    )
+    assert load_agent_config(config).servers == ()
+
+
 def test_agent_loads_opt_in_file_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("TEST_AGENT_TOKEN", "secret")
     server_root = tmp_path / "server"

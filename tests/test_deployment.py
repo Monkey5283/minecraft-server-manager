@@ -114,6 +114,8 @@ def test_dashboard_assets_include_guarded_server_deletion():
     sudoers = (ROOT / "deploy/sudoers/minecraft-manager-provisioning").read_text()
     project = (ROOT / "pyproject.toml").read_text()
     updater = (ROOT / "deploy/scripts/update-minecraft-manager").read_text()
+    config = (ROOT / "mc_manager/config.py").read_text()
+    installer = (ROOT / "mc_manager/server_installer.py").read_text()
 
     assert "Delete server" in javascript
     assert "Final confirmation" in javascript
@@ -122,6 +124,9 @@ def test_dashboard_assets_include_guarded_server_deletion():
     assert "mc-manager-delete-server" not in updater
     assert '[[ "$SOURCE_DIR" == /opt/minecraft-manager/* ]]' in updater
     assert "rm -rf /srv/minecraft" not in updater
+    assert "deleted_legacy_servers" in config
+    assert "_legacy_server_allowlisted" in installer
+    assert "Server directory must not be a symbolic link" in installer
 
 
 def test_dashboard_assets_include_scoped_files_and_minecraft_console():

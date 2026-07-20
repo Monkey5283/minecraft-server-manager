@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -224,11 +225,6 @@ async def test_guarded_delete_job_removes_dashboard_registration_after_success(
             "/api/servers/creative",
             json={"confirmation": "wrong"},
         )
-        protected_static = await client.request(
-            "DELETE",
-            "/api/servers/velocity",
-            json={"confirmation": "velocity"},
-        )
         deletion = await client.request(
             "DELETE",
             "/api/servers/creative",
@@ -241,11 +237,57 @@ async def test_guarded_delete_job_removes_dashboard_registration_after_success(
 
     assert creative["deletion_enabled"] is True
     assert bad_confirmation.status_code == 400
-    assert protected_static.status_code == 409
     assert deletion.status_code == 200
     assert completed.json()["state"] == "succeeded"
     assert [item["controller_id"] for item in remaining.json()] == ["velocity"]
     agents.delete_server.assert_awaited_once()
+
+
+async def test_guarded_delete_job_suppresses_legacy_controller_server(
+    tmp_path: Path, monkeypatch
+):
+    entries = agent_entries()
+    entries["velocity"]["deletion_enabled"] = True
+    registry_path = tmp_path / "managed-servers.json"
+    app, agents = make_app(monkeypatch, registry_path, entries)
+    agents.delete_server = AsyncMock(
+        return_value={
+            "id": "legacy-delete-job",
+            "server_id": "velocity",
+            "operation": "delete_server",
+            "state": "queued",
+        }
+    )
+    agents.job = AsyncMock(
+        return_value={
+            "id": "legacy-delete-job",
+            "server_id": "velocity",
+            "operation": "delete_server",
+            "state": "succeeded",
+        }
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await login(client)
+        dashboard = await client.get("/api/servers")
+        deletion = await client.request(
+            "DELETE",
+            "/api/servers/velocity",
+            json={"confirmation": "velocity"},
+        )
+        completed = await client.get(
+            "/api/servers/velocity/jobs/legacy-delete-job"
+        )
+        remaining = await client.get("/api/servers")
+
+    assert dashboard.json()[0]["deletion_enabled"] is True
+    assert deletion.status_code == 200
+    assert completed.json()["state"] == "succeeded"
+    assert remaining.json() == []
+    assert json.loads(registry_path.read_text(encoding="utf-8"))[
+        "deleted_legacy_servers"
+    ] == ["velocity"]
 
 
 async def test_registered_server_survives_app_recreation(tmp_path: Path, monkeypatch):

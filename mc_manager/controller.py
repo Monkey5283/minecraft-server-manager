@@ -124,7 +124,9 @@ def create_controller_app(
     )
     registry = ManagedServerRegistry(registry_path, base_servers)
     registry.load()
-    config = replace(config, servers=base_servers + registry.materialized())
+    config = replace(
+        config, servers=registry.active_base_servers() + registry.materialized()
+    )
     agents = AgentClient()
     discovery = DiscoveryRegistry()
     paired = PairedAgentStore(config.agent_registry_file)
@@ -141,7 +143,9 @@ def create_controller_app(
     player_monitor_holder: list[PlayerPresenceMonitor | None] = [None]
 
     def sync_runtime_servers() -> None:
-        runtime_servers = list(base_servers + registry.materialized())
+        runtime_servers = list(
+            registry.active_base_servers() + registry.materialized()
+        )
         reserved_ids = {server.id for server in runtime_servers}
         dynamic_owner.clear()
         for paired_agent in paired.agents.values():
@@ -720,7 +724,7 @@ def create_controller_app(
                 result["managed_registration"] = server.id in registry.entries
                 result["deletion_enabled"] = bool(
                     result.get("deletion_enabled", False)
-                ) and server.id not in base_server_map
+                )
                 return result
             except AgentUnavailable as exc:
                 return {
@@ -786,11 +790,6 @@ def create_controller_app(
         request: Request,
     ) -> dict:
         require_login(request)
-        if server_id in base_server_map:
-            raise HTTPException(
-                status_code=409,
-                detail="Servers defined in controller.toml cannot be deleted here",
-            )
         if not hmac.compare_digest(payload.confirmation, server_id):
             raise HTTPException(
                 status_code=400,
@@ -962,7 +961,9 @@ def create_controller_app(
                 and result.get("operation") == "delete_server"
             ):
                 async with registry_lock:
-                    if server_id in registry.entries:
+                    if server_id in base_server_map:
+                        registry.suppress_base(server_id)
+                    elif server_id in registry.entries:
                         registry.remove(server_id)
                     for agent in paired.agents.values():
                         same_agent = (

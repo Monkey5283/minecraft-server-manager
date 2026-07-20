@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 
-from mc_manager.agent import Job, create_agent_app
+from mc_manager.agent import STANDARD_MINECRAFT_ROOT, Job, create_agent_app
 from mc_manager.config import AgentConfig, AgentServer, PlayerQueryConfig
 from mc_manager.minecraft_query import MinecraftQueryError
 
@@ -105,7 +105,7 @@ async def test_agent_exposes_and_starts_managed_software_change(tmp_path: Path):
         server_id=selected.id,
         operation="change_software",
     )
-    app.state.runtime.start_delete_server_job = lambda selected, confirmation: Job(
+    app.state.runtime.start_delete_server_job = lambda selected, confirmation, **_: Job(
         id="delete-job",
         server_id=selected.id,
         operation="delete_server",
@@ -156,6 +156,65 @@ async def test_agent_exposes_and_starts_managed_software_change(tmp_path: Path):
     assert rejected_delete.status_code == 400
     assert deleted.status_code == 200
     assert deleted.json()["id"] == "delete-job"
+
+
+async def test_agent_exposes_guarded_deletion_for_standard_legacy_server(
+    tmp_path: Path,
+):
+    ok_command = ((sys.executable, "-c", "print('online')"),)
+    service = "minecraft@vanillaplus.service"
+    server = AgentServer(
+        id="vanillaplus",
+        name="Vanilla Plus",
+        working_directory=(STANDARD_MINECRAFT_ROOT / "vanillaplus").resolve(),
+        actions={
+            "start": ok_command,
+            "stop": (("sudo", "-n", "/usr/bin/systemctl", "stop", service),),
+            "restart": ok_command,
+            "status": ok_command,
+        },
+        scripts={},
+    )
+    managed_registry = tmp_path / "managed-servers.json"
+    managed_registry.write_text('{"version":1,"servers":[]}')
+    app = create_agent_app(
+        AgentConfig(
+            name="test-agent",
+            bind="127.0.0.1",
+            port=8766,
+            token="test-token",
+            servers=(server,),
+            provisioning_enabled=True,
+            managed_servers_file=managed_registry,
+        ),
+        config_path=tmp_path / "agent.toml",
+    )
+    captured: dict[str, bool] = {}
+
+    def start_delete(selected, confirmation, *, legacy=False):
+        captured["legacy"] = legacy
+        return Job(
+            id="legacy-delete-job",
+            server_id=selected.id,
+            operation="delete_server",
+        )
+
+    app.state.runtime.start_delete_server_job = start_delete
+    transport = httpx.ASGITransport(app=app)
+    headers = {"Authorization": "Bearer test-token"}
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        listed = await client.get("/v1/servers", headers=headers)
+        deleted = await client.request(
+            "DELETE",
+            "/v1/servers/vanillaplus",
+            headers=headers,
+            json={"confirmation": "vanillaplus"},
+        )
+
+    assert listed.json()[0]["deletion_enabled"] is True
+    assert deleted.status_code == 200
+    assert captured == {"legacy": True}
 
 
 async def test_agent_exposes_authenticated_player_snapshot(tmp_path: Path, monkeypatch):

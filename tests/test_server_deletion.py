@@ -101,3 +101,63 @@ def test_delete_backup_failure_restores_service_without_removing_data(
     assert json.loads(registry_path.read_text())["servers"][0]["id"] == "vanillaplus"
     assert ("stop", "minecraft@vanillaplus.service", True) in systemctl_calls
     assert ("start", "minecraft@vanillaplus.service", False) in systemctl_calls
+
+
+def test_standard_legacy_delete_is_allowlisted_and_writes_tombstone(
+    tmp_path: Path, monkeypatch
+) -> None:
+    server_dir, registry_path, _backup_root = configured_server(tmp_path, monkeypatch)
+    registry_path.write_text('{"version":1,"servers":[]}', encoding="utf-8")
+    agent_config = tmp_path / "agent.toml"
+    agent_config.write_text(
+        '''[[servers]]
+id = "vanillaplus"
+working_directory = "/srv/minecraft/vanillaplus"
+[servers.actions]
+stop = [["sudo", "-n", "/usr/bin/systemctl", "stop", "minecraft@vanillaplus.service"]]
+''',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server_installer, "AGENT_CONFIG_PATH", agent_config)
+
+    result = delete_managed_server(
+        {
+            "id": "vanillaplus",
+            "confirmation": "vanillaplus",
+            "legacy": True,
+        }
+    )
+
+    assert result["legacy"] is True
+    assert not server_dir.exists()
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert registry["deleted_legacy_servers"] == ["vanillaplus"]
+
+
+def test_legacy_delete_rejects_custom_or_unlisted_layout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    server_dir, registry_path, _backup_root = configured_server(tmp_path, monkeypatch)
+    registry_path.write_text('{"version":1,"servers":[]}', encoding="utf-8")
+    agent_config = tmp_path / "agent.toml"
+    agent_config.write_text(
+        '''[[servers]]
+id = "vanillaplus"
+working_directory = "/custom/vanillaplus"
+[servers.actions]
+stop = [["sudo", "-n", "/usr/bin/systemctl", "stop", "custom.service"]]
+''',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server_installer, "AGENT_CONFIG_PATH", agent_config)
+
+    with pytest.raises(InstallError, match="not allowlisted"):
+        delete_managed_server(
+            {
+                "id": "vanillaplus",
+                "confirmation": "vanillaplus",
+                "legacy": True,
+            }
+        )
+
+    assert server_dir.exists()

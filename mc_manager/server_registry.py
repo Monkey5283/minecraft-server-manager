@@ -44,10 +44,12 @@ class ManagedServerRegistry:
         self.path = path
         self.base_servers = {server.id: server for server in base_servers}
         self.entries: dict[str, ManagedServer] = {}
+        self.suppressed_base_ids: set[str] = set()
 
     def load(self) -> tuple[ManagedServer, ...]:
         if not self.path.exists():
             self.entries = {}
+            self.suppressed_base_ids = set()
             return ()
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -60,6 +62,14 @@ class ManagedServerRegistry:
         raw_entries = payload.get("servers")
         if not isinstance(raw_entries, list):
             raise ServerRegistryError("Managed server registry must contain a server list")
+        raw_suppressed = payload.get("deleted_legacy_servers", [])
+        if not isinstance(raw_suppressed, list) or not all(
+            isinstance(server_id, str) and server_id in self.base_servers
+            for server_id in raw_suppressed
+        ):
+            raise ServerRegistryError(
+                "Managed server registry has invalid deleted legacy server ids"
+            )
 
         loaded: dict[str, ManagedServer] = {}
         for index, raw in enumerate(raw_entries):
@@ -96,7 +106,15 @@ class ManagedServerRegistry:
                 track_players=track_players,
             )
         self.entries = loaded
+        self.suppressed_base_ids = set(raw_suppressed)
         return tuple(loaded.values())
+
+    def active_base_servers(self) -> tuple[RemoteServer, ...]:
+        return tuple(
+            server
+            for server_id, server in self.base_servers.items()
+            if server_id not in self.suppressed_base_ids
+        )
 
     def materialize(self, entry: ManagedServer) -> RemoteServer:
         source = self.base_servers[entry.source_server_id]
@@ -164,6 +182,18 @@ class ManagedServerRegistry:
             raise
         return current
 
+    def suppress_base(self, server_id: str) -> None:
+        if server_id not in self.base_servers:
+            raise ServerRegistryError("Only controller.toml servers can be suppressed")
+        if server_id in self.suppressed_base_ids:
+            return
+        self.suppressed_base_ids.add(server_id)
+        try:
+            self._save()
+        except Exception:
+            self.suppressed_base_ids.remove(server_id)
+            raise
+
     def public_entries(self) -> list[dict]:
         return [asdict(entry) for entry in self.entries.values()]
 
@@ -173,6 +203,8 @@ class ManagedServerRegistry:
             "version": 1,
             "servers": [asdict(entry) for entry in self.entries.values()],
         }
+        if self.suppressed_base_ids:
+            payload["deleted_legacy_servers"] = sorted(self.suppressed_base_ids)
         descriptor = -1
         temporary_path: Path | None = None
         try:

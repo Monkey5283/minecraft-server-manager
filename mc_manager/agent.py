@@ -33,6 +33,7 @@ from .server_console import ServerConsole, ServerConsoleError
 LOG = logging.getLogger("mc_manager.agent")
 MAX_OUTPUT = 32_000
 MAX_JOBS = 200
+STANDARD_MINECRAFT_ROOT = Path("/srv/minecraft")
 
 
 class FileWriteRequest(BaseModel):
@@ -153,6 +154,18 @@ class AgentRuntime:
             ),
             None,
         )
+
+    def standard_legacy_server(self, server: AgentServer) -> bool:
+        if self.managed_server_record(server.id) is not None:
+            return False
+        expected_directory = (STANDARD_MINECRAFT_ROOT / server.id).resolve()
+        service = f"minecraft@{server.id}.service"
+        has_standard_stop = any(
+            len(command) >= 3
+            and command[-3:] == ("/usr/bin/systemctl", "stop", service)
+            for command in server.actions.get("stop", ())
+        )
+        return server.working_directory == expected_directory and has_standard_stop
 
     def software_metadata(self, server: AgentServer) -> dict | None:
         record = self.managed_server_record(server.id)
@@ -378,7 +391,11 @@ class AgentRuntime:
         return job
 
     async def run_delete_server_job(
-        self, job: Job, server: AgentServer, confirmation: str
+        self,
+        job: Job,
+        server: AgentServer,
+        confirmation: str,
+        legacy: bool,
     ) -> None:
         async with self.provisioning_lock, self.locks[server.id]:
             job.state = "running"
@@ -389,7 +406,11 @@ class AgentRuntime:
                 "/opt/minecraft-manager/venv/bin/mc-manager-delete-server",
                 "--request",
                 json.dumps(
-                    {"id": server.id, "confirmation": confirmation},
+                    {
+                        "id": server.id,
+                        "confirmation": confirmation,
+                        "legacy": legacy,
+                    },
                     separators=(",", ":"),
                 ),
             )
@@ -418,7 +439,7 @@ class AgentRuntime:
                 job.completed_at = time.time()
 
     def start_delete_server_job(
-        self, server: AgentServer, confirmation: str
+        self, server: AgentServer, confirmation: str, *, legacy: bool = False
     ) -> Job:
         while len(self.jobs) >= MAX_JOBS:
             self.jobs.popitem(last=False)
@@ -429,7 +450,9 @@ class AgentRuntime:
         )
         self.jobs[job.id] = job
         self.maintenance_servers.add(server.id)
-        asyncio.create_task(self.run_delete_server_job(job, server, confirmation))
+        asyncio.create_task(
+            self.run_delete_server_job(job, server, confirmation, legacy)
+        )
         return job
 
 
@@ -587,10 +610,15 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
         if runtime.config_path is None:
             raise HTTPException(status_code=409, detail="Agent cannot reload its configuration")
         server = find_server(server_id)
-        if runtime.managed_server_record(server_id) is None:
+        managed = runtime.managed_server_record(server_id) is not None
+        legacy = runtime.standard_legacy_server(server)
+        if not managed and not legacy:
             raise HTTPException(
                 status_code=409,
-                detail="Only dashboard-provisioned servers can be deleted",
+                detail=(
+                    "Legacy deletion requires the standard "
+                    "/srv/minecraft/SERVER_ID directory and minecraft@ service"
+                ),
             )
         if not hmac.compare_digest(payload.confirmation, server.id):
             raise HTTPException(
@@ -603,7 +631,11 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
             or runtime.has_pending_job(server.id)
         ):
             raise HTTPException(status_code=409, detail="Server maintenance is in progress")
-        return asdict(runtime.start_delete_server_job(server, payload.confirmation))
+        return asdict(
+            runtime.start_delete_server_job(
+                server, payload.confirmation, legacy=legacy
+            )
+        )
 
     @app.get("/v1/servers", dependencies=[Depends(authenticate)])
     async def list_servers() -> list[dict]:
@@ -623,6 +655,10 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
                     state = "offline"
                     detail = str(exc)[-1000:]
             software = runtime.software_metadata(server)
+            deletion_supported = (
+                runtime.managed_server_record(server.id) is not None
+                or runtime.standard_legacy_server(server)
+            )
             results.append(
                 {
                     "id": server.id,
@@ -638,7 +674,7 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
                         runtime.config.provisioning_enabled and software is not None
                     ),
                     "deletion_enabled": (
-                        runtime.config.provisioning_enabled and software is not None
+                        runtime.config.provisioning_enabled and deletion_supported
                     ),
                     "software": software,
                 }

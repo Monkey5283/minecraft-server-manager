@@ -200,6 +200,7 @@ def load_agent_config(path: str | Path) -> AgentConfig:
         raise ConfigError("provisioning.managed_servers_file must be an absolute path")
 
     raw_servers = list(data.get("servers", []))
+    deleted_legacy_servers: set[str] = set()
     if managed_servers_file.exists():
         try:
             managed_payload = json.loads(managed_servers_file.read_text(encoding="utf-8"))
@@ -216,6 +217,16 @@ def load_agent_config(path: str | Path) -> AgentConfig:
             raise ConfigError(
                 f"Invalid managed server registry {managed_servers_file}: servers must be a list"
             )
+        raw_deleted = managed_payload.get("deleted_legacy_servers", [])
+        if not isinstance(raw_deleted, list) or not all(
+            isinstance(server_id, str) and ID_PATTERN.fullmatch(server_id)
+            for server_id in raw_deleted
+        ):
+            raise ConfigError(
+                f"Invalid managed server registry {managed_servers_file}: "
+                "deleted_legacy_servers must contain valid server ids"
+            )
+        deleted_legacy_servers = set(raw_deleted)
         for managed_entry in managed_entries:
             if not isinstance(managed_entry, dict):
                 raw_servers.append(managed_entry)
@@ -229,6 +240,30 @@ def load_agent_config(path: str | Path) -> AgentConfig:
                     "log_file": f"{working_directory}/logs/latest.log",
                 }
             raw_servers.append(normalized_entry)
+
+    normalized_servers: list[dict] = []
+    for raw in raw_servers:
+        if not isinstance(raw, dict):
+            normalized_servers.append(raw)
+            continue
+        normalized_entry = dict(raw)
+        raw_id = str(normalized_entry.get("id", ""))
+        if raw_id in deleted_legacy_servers:
+            continue
+        working_directory = str(normalized_entry.get("working_directory", ""))
+        standard_directory = f"/srv/minecraft/{raw_id}"
+        if (
+            "console" not in normalized_entry
+            and working_directory
+            and PurePosixPath(working_directory).as_posix() == standard_directory
+        ):
+            normalized_entry["console"] = {
+                "enabled": True,
+                "input_pipe": f"{standard_directory}/.manager/console.in",
+                "log_file": f"{standard_directory}/logs/latest.log",
+            }
+        normalized_servers.append(normalized_entry)
+    raw_servers = normalized_servers
 
     servers: list[AgentServer] = []
     seen: set[str] = set()

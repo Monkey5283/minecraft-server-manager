@@ -10,7 +10,9 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import tomllib
 from pathlib import Path
+from pathlib import PurePosixPath
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -41,6 +43,7 @@ MAX_SERVER_DOWNLOAD = 1024 * 1024 * 1024
 MINECRAFT_ROOT = Path("/srv/minecraft")
 BACKUP_ROOT = Path("/srv/minecraft-backups")
 REGISTRY_PATH = MINECRAFT_ROOT / ".manager" / "managed-servers.json"
+AGENT_CONFIG_PATH = Path("/etc/minecraft-manager/agent.toml")
 
 
 class InstallError(RuntimeError):
@@ -279,6 +282,43 @@ def _write_registry(path: Path, registry: dict) -> None:
         pass
 
 
+def _legacy_server_allowlisted(server_id: str) -> bool:
+    try:
+        with AGENT_CONFIG_PATH.open("rb") as handle:
+            payload = tomllib.load(handle)
+    except (FileNotFoundError, OSError, tomllib.TOMLDecodeError):
+        return False
+    raw_servers = payload.get("servers", []) if isinstance(payload, dict) else []
+    if not isinstance(raw_servers, list):
+        return False
+    expected_directory = f"/srv/minecraft/{server_id}"
+    expected_service = f"minecraft@{server_id}.service"
+    for raw in raw_servers:
+        if not isinstance(raw, dict) or raw.get("id") != server_id:
+            continue
+        working_directory = PurePosixPath(
+            str(raw.get("working_directory", ""))
+        ).as_posix()
+        actions = raw.get("actions", {})
+        stop_steps = actions.get("stop", []) if isinstance(actions, dict) else []
+        if isinstance(stop_steps, list) and all(
+            isinstance(part, str) for part in stop_steps
+        ):
+            stop_steps = [stop_steps]
+        standard_stop = any(
+            isinstance(command, list)
+            and len(command) >= 3
+            and command[-3:] == [
+                "/usr/bin/systemctl",
+                "stop",
+                expected_service,
+            ]
+            for command in stop_steps
+        )
+        return working_directory == expected_directory and standard_stop
+    return False
+
+
 def _systemctl(action: str, service: str, *, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["/usr/bin/systemctl", action, service],
@@ -466,6 +506,11 @@ def install_server(request: dict) -> dict:
                 maximum_memory=maximum_memory,
             )
         )
+        registry["deleted_legacy_servers"] = [
+            item
+            for item in registry.get("deleted_legacy_servers", [])
+            if item != server_id
+        ]
         _write_registry(registry_path, registry)
         registry_written = True
     except Exception:
@@ -660,11 +705,18 @@ def delete_managed_server(request: dict) -> dict:
         ),
         None,
     )
-    if record is None:
+    legacy = record is None and request.get("legacy") is True
+    if record is None and not legacy:
         raise InstallError("Only dashboard-provisioned servers can be deleted")
+    if legacy and not _legacy_server_allowlisted(server_id):
+        raise InstallError(
+            "Legacy server is not allowlisted with the standard directory and service"
+        )
     server_dir = MINECRAFT_ROOT / server_id
     if not server_dir.is_dir():
         raise InstallError(f"Server directory does not exist: {server_dir}")
+    if server_dir.is_symlink():
+        raise InstallError("Server directory must not be a symbolic link")
 
     service = f"minecraft@{server_id}.service"
     was_active = _service_active(service)
@@ -676,24 +728,29 @@ def delete_managed_server(request: dict) -> dict:
         suffix += 1
     moved = False
     registry_changed = False
+    previous_registry = json.loads(json.dumps(registry))
     try:
         _systemctl("stop", service)
         backup = _deletion_backup(server_id, server_dir)
         _systemctl("disable", service)
         server_dir.replace(quarantine)
         moved = True
-        registry["servers"] = [
-            item for item in registry["servers"] if item is not record
-        ]
+        if record is not None:
+            registry["servers"] = [
+                item for item in registry["servers"] if item is not record
+            ]
+        else:
+            deleted = registry.setdefault("deleted_legacy_servers", [])
+            if server_id not in deleted:
+                deleted.append(server_id)
         _write_registry(REGISTRY_PATH, registry)
         registry_changed = True
     except Exception as exc:
         if moved and quarantine.exists() and not server_dir.exists():
             quarantine.replace(server_dir)
         if registry_changed:
-            registry["servers"].append(record)
             try:
-                _write_registry(REGISTRY_PATH, registry)
+                _write_registry(REGISTRY_PATH, previous_registry)
             except OSError:
                 pass
         _systemctl("enable", service, check=False)
@@ -713,6 +770,7 @@ def delete_managed_server(request: dict) -> dict:
         "state": "deleted",
         "backup": str(backup),
         "cleanup_pending": cleanup_pending,
+        "legacy": legacy,
     }
 
 

@@ -423,11 +423,14 @@ server has been checked in-game. This control is intentionally unavailable for
 manual `[[servers]]` entries because the agent cannot safely infer their custom
 launch and backup layout.
 
-Dashboard-provisioned servers also show **Delete server**. Deletion requires
-typing the exact server ID and accepting a final confirmation. The agent stops
-and disables the service and creates a complete archive under
-`/srv/minecraft-backups/SERVER_ID` before removing the server directory. Servers
-defined directly in `controller.toml` remain protected from dashboard deletion.
+Dashboard-provisioned servers and standard legacy servers also show **Delete
+server**. Deletion requires typing the exact server ID and accepting a final
+confirmation. The agent stops and disables the service and creates a complete
+archive under `/srv/minecraft-backups/SERVER_ID` before removing the server
+directory. A legacy server is eligible only when its root-owned `agent.toml`
+entry uses `/srv/minecraft/SERVER_ID` and `minecraft@SERVER_ID.service`. The
+controller and agent remember the deletion so the legacy entry disappears and
+the same ID can be provisioned again. Custom legacy layouts remain protected.
 
 For manually managed servers:
 
@@ -472,8 +475,10 @@ max_edit_size_bytes = 2097152
 max_upload_size_bytes = 33554432
 ```
 
-To enable the Minecraft command console for a manually configured server, use
-the supplied `start-minecraft-server` launcher and add:
+Standard legacy servers under `/srv/minecraft/SERVER_ID` receive these console
+defaults automatically. Restart the Minecraft server once after updating so the
+supplied `start-minecraft-server` launcher creates its input pipe. For a custom
+manual layout, use that launcher and add:
 
 ```toml
 [servers.console]

@@ -77,6 +77,22 @@ def test_registry_updates_and_removes_only_managed_entries(tmp_path: Path):
         registry.remove("velocity")
 
 
+def test_registry_suppresses_legacy_base_server_persistently(tmp_path: Path):
+    path = tmp_path / "managed-servers.json"
+    registry = ManagedServerRegistry(path, base_servers())
+    registry.load()
+
+    registry.suppress_base("velocity")
+
+    assert registry.active_base_servers() == ()
+    assert json.loads(path.read_text(encoding="utf-8"))[
+        "deleted_legacy_servers"
+    ] == ["velocity"]
+    reloaded = ManagedServerRegistry(path, base_servers())
+    reloaded.load()
+    assert reloaded.active_base_servers() == ()
+
+
 @pytest.mark.parametrize("server_id", ["", "UPPERCASE", "has spaces", "../escape"])
 def test_registry_rejects_unsafe_server_ids(tmp_path: Path, server_id: str):
     registry = ManagedServerRegistry(tmp_path / "managed-servers.json", base_servers())
