@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections import OrderedDict
@@ -60,6 +61,16 @@ class ProvisionRequest(BaseModel):
     accept_eula: bool = False
 
 
+class SoftwareChangeRequest(BaseModel):
+    type: str
+    version: str
+    minimum_memory: str = "1G"
+    maximum_memory: str = "4G"
+    java_path: str = "/usr/bin/java"
+    accept_eula: bool = False
+    confirm_backup: bool = False
+
+
 class CommandFailed(RuntimeError):
     def __init__(self, executable: str, returncode: int, output: str):
         self.executable = executable
@@ -87,6 +98,7 @@ class AgentRuntime:
         self.config = config
         self.config_path = config_path
         self.provisioning_lock = asyncio.Lock()
+        self.maintenance_servers: set[str] = set()
         self.servers = {server.id: server for server in config.servers}
         self.locks = {server.id: asyncio.Lock() for server in config.servers}
         self.file_managers = {
@@ -118,6 +130,83 @@ class AgentRuntime:
             for server in config.servers
             if server.console is not None
         }
+
+    def managed_server_record(self, server_id: str) -> dict | None:
+        try:
+            payload = json.loads(
+                self.config.managed_servers_file.read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+            return None
+        entries = payload.get("servers", []) if isinstance(payload, dict) else []
+        if not isinstance(entries, list):
+            return None
+        return next(
+            (
+                item
+                for item in entries
+                if isinstance(item, dict) and item.get("id") == server_id
+            ),
+            None,
+        )
+
+    def software_metadata(self, server: AgentServer) -> dict | None:
+        record = self.managed_server_record(server.id)
+        if record is None:
+            return None
+        raw = record.get("software")
+        if isinstance(raw, dict):
+            return {
+                "type": str(raw.get("type", "")),
+                "version": str(raw.get("version", "")),
+                "java_path": str(raw.get("java_path", "/usr/bin/java")),
+                "minimum_memory": str(raw.get("minimum_memory", "1G")),
+                "maximum_memory": str(raw.get("maximum_memory", "4G")),
+            }
+
+        metadata = {
+            "type": "paper" if "update" in server.actions else "",
+            "version": "",
+            "java_path": "/usr/bin/java",
+            "minimum_memory": "1G",
+            "maximum_memory": "4G",
+        }
+        update_environment = server.working_directory / ".manager-update.env"
+        try:
+            for line in update_environment.read_text(encoding="utf-8").splitlines():
+                if line.startswith("PAPER_VERSION="):
+                    metadata["type"] = "paper"
+                    metadata["version"] = line.partition("=")[2]
+        except (FileNotFoundError, OSError, UnicodeError):
+            pass
+        try:
+            launcher = (server.working_directory / "start-server").read_text(
+                encoding="utf-8"
+            )
+            java_match = re.search(r"^exec\s+(\S+)\s+-Xms", launcher, re.MULTILINE)
+            minimum_match = re.search(r"-Xms([^\s]+)", launcher)
+            maximum_match = re.search(r"-Xmx([^\s]+)", launcher)
+            if java_match:
+                metadata["java_path"] = java_match.group(1)
+            if minimum_match:
+                metadata["minimum_memory"] = minimum_match.group(1).upper()
+            if maximum_match:
+                metadata["maximum_memory"] = maximum_match.group(1).upper()
+        except (FileNotFoundError, OSError, UnicodeError):
+            pass
+        return metadata
+
+    def server_busy(self, server_id: str) -> bool:
+        return (
+            server_id in self.maintenance_servers
+            or self.locks[server_id].locked()
+        )
+
+    def has_pending_job(self, server_id: str) -> bool:
+        return any(
+            job.server_id == server_id and job.state in {"queued", "running"}
+            for job in self.jobs.values()
+        )
 
     async def execute_steps(
         self,
@@ -228,6 +317,60 @@ class AgentRuntime:
         )
         self.jobs[job.id] = job
         asyncio.create_task(self.run_provision_job(job, payload))
+        return job
+
+    async def run_software_change_job(
+        self, job: Job, server: AgentServer, payload: dict
+    ) -> None:
+        async with self.provisioning_lock, self.locks[server.id]:
+            job.state = "running"
+            job.started_at = time.time()
+            command = (
+                "sudo",
+                "-n",
+                "/opt/minecraft-manager/venv/bin/mc-manager-change-software",
+                "--request",
+                json.dumps(
+                    {"id": server.id, **payload}, separators=(",", ":")
+                ),
+            )
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=os.environ.copy(),
+                )
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=7200)
+                output = stdout.decode("utf-8", errors="replace")[-MAX_OUTPUT:]
+                if process.returncode != 0:
+                    raise CommandFailed(command[2], process.returncode, output)
+                job.output = output
+                if self.config_path is None:
+                    raise RuntimeError("Agent configuration path is unavailable for reload")
+                self.replace_config(load_agent_config(self.config_path))
+                job.state = "succeeded"
+            except Exception as exc:
+                LOG.exception("Software change job %s failed", job.id)
+                job.error = str(exc)[-MAX_OUTPUT:]
+                job.state = "failed"
+            finally:
+                self.maintenance_servers.discard(server.id)
+                job.completed_at = time.time()
+
+    def start_software_change_job(
+        self, server: AgentServer, payload: dict
+    ) -> Job:
+        while len(self.jobs) >= MAX_JOBS:
+            self.jobs.popitem(last=False)
+        job = Job(
+            id=str(uuid.uuid4()),
+            server_id=server.id,
+            operation="change_software",
+        )
+        self.jobs[job.id] = job
+        self.maintenance_servers.add(server.id)
+        asyncio.create_task(self.run_software_change_job(job, server, payload))
         return job
 
 
@@ -348,13 +491,40 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
             raise HTTPException(status_code=409, detail="Server id already exists")
         return asdict(runtime.start_provision_job(payload.model_dump()))
 
+    @app.post(
+        "/v1/servers/{server_id}/software",
+        dependencies=[Depends(authenticate)],
+    )
+    async def change_software(
+        server_id: str, payload: SoftwareChangeRequest
+    ) -> dict:
+        if not runtime.config.provisioning_enabled:
+            raise HTTPException(status_code=409, detail="Agent provisioning is disabled")
+        if runtime.config_path is None:
+            raise HTTPException(status_code=409, detail="Agent cannot reload its configuration")
+        server = find_server(server_id)
+        if runtime.managed_server_record(server_id) is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Only dashboard-provisioned servers can change software",
+            )
+        if (
+            runtime.provisioning_lock.locked()
+            or runtime.server_busy(server.id)
+            or runtime.has_pending_job(server.id)
+        ):
+            raise HTTPException(status_code=409, detail="Server maintenance is in progress")
+        return asdict(
+            runtime.start_software_change_job(server, payload.model_dump())
+        )
+
     @app.get("/v1/servers", dependencies=[Depends(authenticate)])
     async def list_servers() -> list[dict]:
         results = []
         for server in runtime.config.servers:
             state = "unknown"
             detail = ""
-            if runtime.locks[server.id].locked():
+            if runtime.server_busy(server.id):
                 state = "busy"
             else:
                 try:
@@ -365,6 +535,7 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
                 except RuntimeError as exc:
                     state = "offline"
                     detail = str(exc)[-1000:]
+            software = runtime.software_metadata(server)
             results.append(
                 {
                     "id": server.id,
@@ -376,6 +547,10 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
                     "files_enabled": server.file_manager is not None,
                     "console_enabled": server.console is not None,
                     "player_tracking_available": server.player_query is not None,
+                    "software_change_enabled": (
+                        runtime.config.provisioning_enabled and software is not None
+                    ),
+                    "software": software,
                 }
             )
         return results
@@ -433,7 +608,7 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
     )
     async def write_file(server_id: str, payload: FileWriteRequest) -> dict:
         server, manager = find_file_manager(server_id)
-        if runtime.locks[server.id].locked():
+        if runtime.server_busy(server.id):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Server maintenance is in progress; try again when it finishes",
@@ -456,7 +631,7 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
         server_id: str, payload: DirectoryCreateRequest
     ) -> dict:
         server, manager = find_file_manager(server_id)
-        if runtime.locks[server.id].locked():
+        if runtime.server_busy(server.id):
             raise HTTPException(status_code=409, detail="Server maintenance is in progress")
         async with runtime.locks[server.id]:
             try:
@@ -490,7 +665,7 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
             content.extend(chunk)
             if len(content) > manager.config.max_upload_size_bytes:
                 raise HTTPException(status_code=413, detail="Upload exceeds configured limit")
-        if runtime.locks[server.id].locked():
+        if runtime.server_busy(server.id):
             raise HTTPException(status_code=409, detail="Server maintenance is in progress")
         async with runtime.locks[server.id]:
             try:
@@ -506,7 +681,7 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
     )
     async def delete_file(server_id: str, path: str) -> dict:
         server, manager = find_file_manager(server_id)
-        if runtime.locks[server.id].locked():
+        if runtime.server_busy(server.id):
             raise HTTPException(status_code=409, detail="Server maintenance is in progress")
         async with runtime.locks[server.id]:
             try:
@@ -613,6 +788,8 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
     @app.post("/v1/servers/{server_id}/actions/{action}", dependencies=[Depends(authenticate)])
     async def start_action(server_id: str, action: str) -> dict:
         server = find_server(server_id)
+        if runtime.server_busy(server.id):
+            raise HTTPException(status_code=409, detail="Server maintenance is in progress")
         if action not in {"start", "stop", "restart", "update"}:
             raise HTTPException(status_code=404, detail="Unsupported action")
         steps = server.actions.get(action)
@@ -629,6 +806,8 @@ def create_agent_app(config: AgentConfig, config_path: Path | None = None) -> Fa
     )
     async def start_script(server_id: str, script_name: str) -> dict:
         server = find_server(server_id)
+        if runtime.server_busy(server.id):
+            raise HTTPException(status_code=409, detail="Server maintenance is in progress")
         steps = server.scripts.get(script_name)
         if not steps:
             raise HTTPException(status_code=404, detail="Unknown or disallowed script")

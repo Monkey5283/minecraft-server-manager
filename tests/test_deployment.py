@@ -89,6 +89,22 @@ def test_dashboard_assets_include_lan_onboarding_and_provisioning():
     assert "/catalog/" in javascript
 
 
+def test_dashboard_assets_include_backup_first_per_server_software_change():
+    static = ROOT / "mc_manager" / "static"
+    html = (static / "index.html").read_text()
+    javascript = (static / "app.js").read_text()
+    sudoers = (ROOT / "deploy/sudoers/minecraft-manager-provisioning").read_text()
+    project = (ROOT / "pyproject.toml").read_text()
+
+    assert 'id="software-panel"' in html
+    assert 'id="software-type"' in html
+    assert "Change software/version" in javascript
+    assert "/software" in javascript
+    assert "confirm_backup" in javascript
+    assert "mc-manager-change-software --request *" in sudoers
+    assert "mc-manager-change-software" in project
+
+
 def test_dashboard_assets_include_scoped_files_and_minecraft_console():
     static = ROOT / "mc_manager" / "static"
     html = (static / "index.html").read_text()

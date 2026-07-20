@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 
-from mc_manager.agent import create_agent_app
+from mc_manager.agent import Job, create_agent_app
 from mc_manager.config import AgentConfig, AgentServer, PlayerQueryConfig
 from mc_manager.minecraft_query import MinecraftQueryError
 
@@ -64,6 +64,77 @@ async def test_agent_requires_token_and_runs_only_configured_action(tmp_path: Pa
 
         assert job["state"] == "succeeded"
         assert "started safely" in job["output"]
+
+
+async def test_agent_exposes_and_starts_managed_software_change(tmp_path: Path):
+    ok_command = ((sys.executable, "-c", "print('online')"),)
+    server_root = tmp_path / "vanillaplus"
+    server_root.mkdir()
+    managed_registry = tmp_path / "managed-servers.json"
+    managed_registry.write_text(
+        '{"version":1,"servers":[{"id":"vanillaplus","software":'
+        '{"type":"paper","version":"1.21.11","java_path":"/usr/bin/java",'
+        '"minimum_memory":"2G","maximum_memory":"6G"}}]}'
+    )
+    server = AgentServer(
+        id="vanillaplus",
+        name="Vanilla Plus",
+        working_directory=server_root,
+        actions={
+            "start": ok_command,
+            "stop": ok_command,
+            "restart": ok_command,
+            "status": ok_command,
+        },
+        scripts={},
+    )
+    app = create_agent_app(
+        AgentConfig(
+            name="test-agent",
+            bind="127.0.0.1",
+            port=8766,
+            token="test-token",
+            servers=(server,),
+            provisioning_enabled=True,
+            managed_servers_file=managed_registry,
+        ),
+        config_path=tmp_path / "agent.toml",
+    )
+    app.state.runtime.start_software_change_job = lambda selected, payload: Job(
+        id="change-job",
+        server_id=selected.id,
+        operation="change_software",
+    )
+    transport = httpx.ASGITransport(app=app)
+    headers = {"Authorization": "Bearer test-token"}
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        listed = await client.get("/v1/servers", headers=headers)
+        app.state.runtime.maintenance_servers.add("vanillaplus")
+        conflicting_action = await client.post(
+            "/v1/servers/vanillaplus/actions/restart", headers=headers
+        )
+        app.state.runtime.maintenance_servers.discard("vanillaplus")
+        changed = await client.post(
+            "/v1/servers/vanillaplus/software",
+            headers=headers,
+            json={
+                "type": "vanilla",
+                "version": "1.21.11",
+                "minimum_memory": "2G",
+                "maximum_memory": "6G",
+                "java_path": "/usr/bin/java",
+                "accept_eula": True,
+                "confirm_backup": True,
+            },
+        )
+
+    assert listed.status_code == 200
+    assert listed.json()[0]["software_change_enabled"] is True
+    assert listed.json()[0]["software"]["type"] == "paper"
+    assert conflicting_action.status_code == 409
+    assert changed.status_code == 200
+    assert changed.json()["id"] == "change-job"
 
 
 async def test_agent_exposes_authenticated_player_snapshot(tmp_path: Path, monkeypatch):
