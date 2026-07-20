@@ -713,10 +713,13 @@ def delete_managed_server(request: dict) -> dict:
             "Legacy server is not allowlisted with the standard directory and service"
         )
     server_dir = MINECRAFT_ROOT / server_id
-    if not server_dir.is_dir():
-        raise InstallError(f"Server directory does not exist: {server_dir}")
-    if server_dir.is_symlink():
+    directory_exists = server_dir.exists()
+    if directory_exists and not server_dir.is_dir():
+        raise InstallError(f"Server path is not a directory: {server_dir}")
+    if directory_exists and server_dir.is_symlink():
         raise InstallError("Server directory must not be a symbolic link")
+    if not directory_exists and not legacy:
+        raise InstallError(f"Server directory does not exist: {server_dir}")
 
     service = f"minecraft@{server_id}.service"
     was_active = _service_active(service)
@@ -731,10 +734,12 @@ def delete_managed_server(request: dict) -> dict:
     previous_registry = json.loads(json.dumps(registry))
     try:
         _systemctl("stop", service)
-        backup = _deletion_backup(server_id, server_dir)
+        if directory_exists:
+            backup = _deletion_backup(server_id, server_dir)
         _systemctl("disable", service)
-        server_dir.replace(quarantine)
-        moved = True
+        if directory_exists:
+            server_dir.replace(quarantine)
+            moved = True
         if record is not None:
             registry["servers"] = [
                 item for item in registry["servers"] if item is not record
@@ -761,14 +766,15 @@ def delete_managed_server(request: dict) -> dict:
         raise InstallError(f"Could not delete managed server: {exc}") from exc
 
     cleanup_pending = ""
-    try:
-        shutil.rmtree(quarantine)
-    except OSError:
-        cleanup_pending = str(quarantine)
+    if moved:
+        try:
+            shutil.rmtree(quarantine)
+        except OSError:
+            cleanup_pending = str(quarantine)
     return {
         "id": server_id,
         "state": "deleted",
-        "backup": str(backup),
+        "backup": str(backup) if backup is not None else None,
         "cleanup_pending": cleanup_pending,
         "legacy": legacy,
     }

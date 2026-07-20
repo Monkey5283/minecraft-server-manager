@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -161,3 +163,38 @@ stop = [["sudo", "-n", "/usr/bin/systemctl", "stop", "custom.service"]]
         )
 
     assert server_dir.exists()
+
+
+def test_standard_legacy_delete_can_remove_stale_registration_without_files(
+    tmp_path: Path, monkeypatch
+) -> None:
+    server_dir, registry_path, _backup_root = configured_server(tmp_path, monkeypatch)
+    shutil.rmtree(server_dir)
+    registry_path.write_text('{"version":1,"servers":[]}', encoding="utf-8")
+    agent_config = tmp_path / "agent.toml"
+    agent_config.write_text(
+        '''[[servers]]
+id = "vanillaplus"
+working_directory = "/srv/minecraft/vanillaplus"
+[servers.actions]
+stop = [["sudo", "-n", "/usr/bin/systemctl", "stop", "minecraft@vanillaplus.service"]]
+''',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server_installer, "AGENT_CONFIG_PATH", agent_config)
+    backup = Mock()
+    monkeypatch.setattr(server_installer, "_deletion_backup", backup)
+
+    result = delete_managed_server(
+        {
+            "id": "vanillaplus",
+            "confirmation": "vanillaplus",
+            "legacy": True,
+        }
+    )
+
+    assert result["legacy"] is True
+    assert result["backup"] is None
+    backup.assert_not_called()
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert registry["deleted_legacy_servers"] == ["vanillaplus"]
