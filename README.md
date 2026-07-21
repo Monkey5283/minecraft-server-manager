@@ -410,7 +410,9 @@ The controller verifies the agent with its existing URL and token, so the token
 does not need to be entered in the browser again.
 
 Dashboard-provisioned servers also show **Change software/version** on their
-server card. The workflow supports Vanilla, Paper, Forge, and NeoForge. It
+server card. The workflow supports Vanilla, Paper, Forge, NeoForge, and
+version-to-version Velocity proxy changes. Velocity cannot be converted into a
+backend server type (or vice versa). The workflow
 downloads and verifies the selected release before downtime, stops the server,
 creates a full archive under `/srv/minecraft-backups/SERVER_ID`, preserves the
 existing world and configuration, changes the runtime, and restarts servers

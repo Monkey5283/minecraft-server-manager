@@ -31,6 +31,7 @@ from .server_catalog import (
     resolve_forge,
     resolve_neoforge,
     resolve_paper,
+    resolve_velocity,
     resolve_vanilla,
 )
 
@@ -39,6 +40,7 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,95}$")
 MEMORY_RE = re.compile(r"^[1-9][0-9]{0,5}[MG]$")
 SERVER_TYPES = frozenset({"vanilla", "paper", "forge", "neoforge"})
+SOFTWARE_TYPES = SERVER_TYPES | {"velocity"}
 MAX_SERVER_DOWNLOAD = 1024 * 1024 * 1024
 MINECRAFT_ROOT = Path("/srv/minecraft")
 BACKUP_ROOT = Path("/srv/minecraft-backups")
@@ -77,6 +79,8 @@ def _resolve(server_type: str, version: str) -> DownloadSpec:
             return resolve_forge(version)
         if server_type == "neoforge":
             return resolve_neoforge(version)
+        if server_type == "velocity":
+            return resolve_velocity(version)
     except CatalogError as exc:
         raise InstallError(str(exc)) from exc
     raise InstallError("Unsupported server type")
@@ -199,7 +203,9 @@ def _stage_software(
     minimum_memory: str,
     maximum_memory: str,
 ) -> None:
-    if server_type in {"vanilla", "paper"}:
+    if server_type == "velocity":
+        _download(spec, staging / "velocity.jar")
+    elif server_type in {"vanilla", "paper"}:
         _download(spec, staging / "server.jar")
     else:
         installer = staging / f"{server_type}-installer.jar"
@@ -230,7 +236,13 @@ def _stage_software(
             raise InstallError(f"{server_type} installer did not create a runnable server")
         shutil.copy2(jars[-1], staging / "server.jar")
 
-    if (staging / "run.sh").exists():
+    if server_type == "velocity":
+        launch = (
+            "#!/usr/bin/env bash\nset -euo pipefail\n"
+            f'exec {shlex.quote(str(java))} -Xms{minimum_memory} -Xmx{maximum_memory} '
+            "-jar velocity.jar\n"
+        )
+    elif (staging / "run.sh").exists():
         os.chmod(staging / "run.sh", 0o750)
         launch = "#!/usr/bin/env bash\nset -euo pipefail\nexec ./run.sh nogui\n"
         _write(
@@ -555,7 +567,7 @@ def change_server_software(request: dict) -> dict:
     java_path = str(request.get("java_path", "/usr/bin/java"))
     if not ID_RE.fullmatch(server_id):
         raise InstallError("Server id must use lowercase letters, numbers, '-' or '_'")
-    if server_type not in SERVER_TYPES:
+    if server_type not in SOFTWARE_TYPES:
         raise InstallError("Unsupported server type")
     if not VERSION_RE.fullmatch(version):
         raise InstallError("Server version has an invalid format")
@@ -580,6 +592,16 @@ def change_server_software(request: dict) -> dict:
     if record is None:
         raise InstallError(
             "Only servers provisioned by the dashboard can change software"
+        )
+    current_software = record.get("software", {})
+    current_type = (
+        str(current_software.get("type", ""))
+        if isinstance(current_software, dict)
+        else ""
+    )
+    if (current_type == "velocity") != (server_type == "velocity"):
+        raise InstallError(
+            "Velocity proxies can only change to another Velocity version"
         )
     server_dir = MINECRAFT_ROOT / server_id
     if not server_dir.is_dir():

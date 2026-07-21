@@ -365,7 +365,12 @@ async function openSoftwareChange(server) {
   softwareForm.reset();
   softwareVersionOptions.replaceChildren();
   const current = server.software || {};
-  softwareType.value = ["paper", "vanilla", "forge", "neoforge"].includes(current.type)
+  const velocityOnly = current.type === "velocity";
+  for (const option of softwareType.options) {
+    option.disabled = velocityOnly ? option.value !== "velocity" : option.value === "velocity";
+    option.hidden = option.disabled;
+  }
+  softwareType.value = ["paper", "vanilla", "forge", "neoforge", "velocity"].includes(current.type)
     ? current.type
     : "paper";
   softwareVersion.value = current.version || "";

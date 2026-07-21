@@ -125,3 +125,39 @@ def test_change_software_rolls_back_when_new_runtime_dies(tmp_path: Path, monkey
         ("stop", "minecraft@vanillaplus.service"),
         ("start", "minecraft@vanillaplus.service"),
     ]
+
+
+def test_stage_velocity_downloads_proxy_jar_and_writes_proxy_launcher(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr(
+        server_installer,
+        "_download",
+        lambda _spec, destination: destination.write_bytes(b"velocity jar"),
+    )
+
+    server_installer._stage_software(
+        tmp_path,
+        "velocity",
+        DownloadSpec("https://example.test/velocity.jar", "00", "sha256", 21),
+        Path("/usr/bin/java"),
+        "512M",
+        "1G",
+    )
+
+    assert (tmp_path / "velocity.jar").read_bytes() == b"velocity jar"
+    launcher = (tmp_path / "start-server").read_text()
+    assert "-jar velocity.jar" in launcher
+    assert "nogui" not in launcher
+
+
+def test_velocity_proxy_cannot_be_converted_to_backend_software(
+    tmp_path: Path, monkeypatch
+):
+    _server_dir, registry_path = configured_server(tmp_path, monkeypatch)
+    registry = json.loads(registry_path.read_text())
+    registry["servers"][0]["software"] = {"type": "velocity", "version": "4.0.0"}
+    registry_path.write_text(json.dumps(registry))
+
+    with pytest.raises(InstallError, match="Velocity proxies can only"):
+        change_server_software(change_request())

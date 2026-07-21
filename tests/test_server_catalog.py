@@ -7,6 +7,8 @@ from mc_manager.server_catalog import (
     FORGE_METADATA,
     MOJANG_MANIFEST,
     PAPER_PROJECT,
+    VELOCITY_PROJECT,
+    resolve_velocity,
     list_versions,
 )
 
@@ -44,6 +46,43 @@ def test_catalog_flattens_paper_version_groups() -> None:
     versions = list_versions("paper", opener=opener_for({PAPER_PROJECT: payload}))
 
     assert [version.id for version in versions] == ["26.2", "26.1", "1.21.11"]
+
+
+def test_catalog_lists_velocity_versions() -> None:
+    payload = json.dumps(
+        {"versions": {"4.0.0": ["4.1.0-SNAPSHOT", "4.0.0"]}}
+    ).encode()
+
+    versions = list_versions(
+        "velocity", opener=opener_for({VELOCITY_PROJECT: payload})
+    )
+
+    assert [version.id for version in versions] == ["4.1.0-SNAPSHOT", "4.0.0"]
+
+
+def test_resolve_velocity_uses_verified_papermc_download() -> None:
+    endpoint = (
+        "https://fill.papermc.io/v3/projects/velocity/versions/4.0.0/builds"
+    )
+    payload = json.dumps([
+        {
+            "id": "100",
+            "channel": "STABLE",
+            "downloads": {
+                "server:default": {
+                    "name": "velocity-4.0.0-100.jar",
+                    "url": "https://fill-data.papermc.io/v1/objects/velocity.jar",
+                    "checksums": {"sha256": "a" * 64},
+                }
+            },
+        }
+    ]).encode()
+
+    download = resolve_velocity("4.0.0", opener=opener_for({endpoint: payload}))
+
+    assert download.url.endswith("/velocity.jar")
+    assert download.checksum == "a" * 64
+    assert download.java_major == 21
 
 
 def test_catalog_lists_forge_maven_versions_newest_first() -> None:

@@ -21,6 +21,7 @@ BUILD_PATTERN = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 JAR_NAME_PATTERN = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*\.jar$")
 ALLOWED_CHANNELS = frozenset({"STABLE", "BETA"})
+ALLOWED_PROJECTS = frozenset({"paper", "velocity"})
 
 
 class PaperDownloadError(RuntimeError):
@@ -113,13 +114,16 @@ def parse_latest_supported_build(payload: Any, version: str) -> PaperDownload:
 def fetch_latest_supported_build(
     version: str,
     *,
+    project: str = "paper",
     opener: Callable[..., Any] = urlopen,
     timeout_seconds: float = 15,
 ) -> PaperDownload:
     if not VERSION_PATTERN.fullmatch(version):
         raise PaperDownloadError("Paper version has an invalid format")
+    if project not in ALLOWED_PROJECTS:
+        raise PaperDownloadError("Unsupported PaperMC project")
     endpoint = (
-        f"{API_ROOT}/projects/paper/versions/"
+        f"{API_ROOT}/projects/{project}/versions/"
         f"{quote(version, safe='')}/builds"
     )
     request = Request(

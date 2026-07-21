@@ -15,6 +15,7 @@ from .paper_download import PaperDownloadError, USER_AGENT, fetch_latest_support
 
 MOJANG_MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 PAPER_PROJECT = "https://fill.papermc.io/v3/projects/paper"
+VELOCITY_PROJECT = "https://fill.papermc.io/v3/projects/velocity"
 FORGE_METADATA = "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml"
 NEOFORGE_METADATA = (
     "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml"
@@ -137,6 +138,11 @@ def list_versions(
             CatalogVersion(version, version, version)
             for version in _paper_versions(_json_url(PAPER_PROJECT, opener=opener))
         ]
+    elif server_type == "velocity":
+        result = [
+            CatalogVersion(version, version, version)
+            for version in _paper_versions(_json_url(VELOCITY_PROJECT, opener=opener))
+        ]
     elif server_type == "forge":
         result = []
         for version in _maven_versions(FORGE_METADATA, opener=opener):
@@ -230,6 +236,19 @@ def resolve_paper(version: str, *, opener: Callable[..., Any] = urlopen) -> Down
     except CatalogError:
         pass
     return DownloadSpec(paper.url, paper.sha256, "sha256", java_major)
+
+
+def resolve_velocity(
+    version: str, *, opener: Callable[..., Any] = urlopen
+) -> DownloadSpec:
+    try:
+        velocity = fetch_latest_supported_build(
+            version, project="velocity", opener=opener
+        )
+    except PaperDownloadError as exc:
+        raise CatalogError(str(exc)) from exc
+    # PaperMC documents Java 21 as Velocity's minimum supported runtime.
+    return DownloadSpec(velocity.url, velocity.sha256, "sha256", 21)
 
 
 def _maven_download(
