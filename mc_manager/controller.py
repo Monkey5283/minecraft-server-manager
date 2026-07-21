@@ -670,6 +670,38 @@ def create_controller_app(
             raise HTTPException(status_code=404, detail="Unknown or unpaired agent")
         return agent
 
+    async def refresh_paired_agent_inventory() -> None:
+        paired_agents = tuple(paired.agents.values())
+        if not paired_agents:
+            return
+        results = await asyncio.gather(
+            *(agents.info(remote_for_agent(agent)) for agent in paired_agents),
+            return_exceptions=True,
+        )
+        async with registry_lock:
+            for agent, info in zip(paired_agents, results, strict=True):
+                if isinstance(info, Exception):
+                    continue
+                previous = [
+                    (server.id, server.name, server.track_players)
+                    for server in agent.servers
+                ]
+                try:
+                    sync_paired_agent(agent, info)
+                except HTTPException as exc:
+                    LOG.warning(
+                        "Could not refresh paired agent %s: %s",
+                        agent.id,
+                        exc.detail,
+                    )
+                    continue
+                current = [
+                    (server.id, server.name, server.track_players)
+                    for server in agent.servers
+                ]
+                if current != previous:
+                    paired.put(agent)
+
     @app.get("/api/agents/{agent_id}/catalog/{server_type}")
     async def agent_catalog(agent_id: str, server_type: str, request: Request) -> dict:
         require_login(request)
@@ -715,6 +747,7 @@ def create_controller_app(
     @app.get("/api/servers")
     async def list_servers(request: Request) -> list[dict]:
         require_login(request)
+        await refresh_paired_agent_inventory()
 
         async def get_status(server: RemoteServer) -> dict:
             try:
@@ -739,7 +772,8 @@ def create_controller_app(
                     "deletion_enabled": False,
                 }
 
-        return list(await asyncio.gather(*(get_status(item) for item in servers.values())))
+        current_servers = tuple(servers.values())
+        return list(await asyncio.gather(*(get_status(item) for item in current_servers)))
 
     @app.post("/api/servers/{server_id}/actions/{action}")
     async def action(server_id: str, action: str, request: Request) -> dict:

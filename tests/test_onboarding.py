@@ -66,6 +66,59 @@ async def test_dashboard_discovers_and_pairs_agent(tmp_path: Path, monkeypatch) 
     assert remote.token == "agent-token"
 
 
+async def test_dashboard_refreshes_paired_agent_server_inventory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    agents = AsyncMock()
+    agents.info.return_value = {
+        "id": "paper-host",
+        "name": "Paper Host",
+        "servers": [{"id": "survival", "name": "Survival", "track_players": True}],
+    }
+    agents.status.side_effect = lambda server: {
+        "id": server.id,
+        "state": "online",
+        "actions": [],
+        "scripts": [],
+    }
+    monkeypatch.setattr("mc_manager.controller.AgentClient", lambda: agents)
+    monkeypatch.setattr("mc_manager.controller.MinecraftDiscordBot", lambda *a, **k: object())
+    app = create_controller_app(onboarding_config(tmp_path))
+    app.state.discovery.observe(
+        encode_beacon("paper-host", "Paper Host", 8766), "192.168.1.126"
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post("/api/login", json={"username": "admin", "password": "password"})
+        await client.post(
+            "/api/agents/pair",
+            json={"agent_id": "paper-host", "token": "agent-token"},
+        )
+        agents.info.return_value = {
+            "id": "paper-host",
+            "name": "Paper Host",
+            "servers": [
+                {"id": "survival", "name": "Survival", "track_players": True},
+                {"id": "creative", "name": "Creative", "track_players": False},
+            ],
+        }
+
+        dashboard = await client.get("/api/servers")
+
+    assert dashboard.status_code == 200
+    assert {item["controller_id"] for item in dashboard.json()} == {
+        "survival",
+        "creative",
+    }
+    persisted = json.loads((tmp_path / "paired-agents.json").read_text())
+    assert [server["id"] for server in persisted["agents"][0]["servers"]] == [
+        "survival",
+        "creative",
+    ]
+
+
 async def test_dashboard_adopts_configured_agent_without_exposing_token(
     tmp_path: Path, monkeypatch
 ) -> None:
