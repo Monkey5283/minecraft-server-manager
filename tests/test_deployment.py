@@ -20,6 +20,12 @@ def test_updater_never_targets_configuration_directory():
     assert "reset --hard /etc" not in updater
 
 
+def test_fleet_updater_does_not_consume_the_fleet_file_through_ssh():
+    updater = (ROOT / "deploy/scripts/update-minecraft-manager-fleet").read_text()
+
+    assert "ssh -n -o BatchMode=yes" in updater
+
+
 def test_controller_unit_has_persistent_player_session_state():
     unit = (ROOT / "deploy/systemd/mc-manager-controller.service").read_text()
 

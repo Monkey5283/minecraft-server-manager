@@ -18,7 +18,7 @@ while IFS= read -r target || [[ -n "$target" ]]; do
     continue
   fi
   echo "Updating agent on ${target}..."
-  if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" \
+  if ! ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$target" \
     sudo --non-interactive /usr/local/sbin/update-minecraft-manager; then
     echo "Agent update failed on ${target}" >&2
     failures=$((failures + 1))
