@@ -73,6 +73,10 @@ install -m 0755 "${source_dir}/deploy/scripts/update-minecraft-manager" \
   /usr/local/sbin/update-minecraft-manager
 
 if [[ "$role" == "controller" ]]; then
+  install -d -o mcmanager -g mcmanager -m 0750 /var/lib/minecraft-manager
+  install -m 0755 "${source_dir}/deploy/scripts/run-minecraft-manager-web-update" /usr/local/sbin/run-minecraft-manager-web-update
+  install -m 0644 "${source_dir}/deploy/systemd/mc-manager-update.service" /etc/systemd/system/mc-manager-update.service
+  install -m 0644 "${source_dir}/deploy/systemd/mc-manager-update.path" /etc/systemd/system/mc-manager-update.path
   if [[ ! -e "${config_dir}/controller.toml" ]]; then
     install -o root -g mcmanager -m 0640 \
       "${source_dir}/config/controller.example.toml" \
@@ -152,6 +156,9 @@ else
 fi
 
 systemctl daemon-reload
+if [[ "$role" == "controller" ]]; then
+  systemctl enable --now mc-manager-update.path
+fi
 systemctl enable "$service_name"
 
 echo

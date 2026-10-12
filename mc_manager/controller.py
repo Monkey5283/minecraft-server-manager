@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -25,6 +26,7 @@ from .config import ConfigError, ControllerConfig, ID_PATTERN, RemoteServer, loa
 from .discovery import DiscoveryRegistry, listen_for_agents
 from .discord_bot import MinecraftDiscordBot
 from .health import ControllerHealthMonitor
+from .panel import PanelStore, NewUser, PasswordChange, RestartSchedule, password_matches
 from .player_monitor import PlayerPresenceMonitor
 from .server_registry import (
     ManagedServer,
@@ -37,14 +39,16 @@ from .ups import UPSMonitor
 LOG = logging.getLogger("mc_manager.controller")
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_PROXY_UPLOAD_BYTES = 128 * 1024 * 1024
+UPDATE_DIRECTORY = Path("/var/lib/minecraft-manager")
+UPDATE_PATH_UNIT = Path("/etc/systemd/system/mc-manager-update.path")
 DEFAULT_MANAGED_SERVERS_FILE = Path(
     "/var/lib/minecraft-manager/managed-servers.json"
 )
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=64)
+    password: str = Field(max_length=256)
 
 
 class FileWriteRequest(BaseModel):
@@ -130,6 +134,7 @@ def create_controller_app(
     agents = AgentClient()
     discovery = DiscoveryRegistry()
     paired = PairedAgentStore(config.agent_registry_file)
+    panel = PanelStore(config.agent_registry_file.with_name("panel-state.json"), config.web_username, config.web_password)
     bot = MinecraftDiscordBot(
         config,
         agents,
@@ -301,12 +306,13 @@ def create_controller_app(
         app.state.player_task = player_task
         app.state.player_monitor = player_monitor
         app.state.discovery_task = discovery_task
+        schedule_task = asyncio.create_task(panel.run(agents, servers))
         try:
             yield
         finally:
             background_tasks = tuple(
                 task
-                for task in (health_task, ups_task, player_task, discovery_task)
+                for task in (health_task, ups_task, player_task, discovery_task, schedule_task)
                 if task is not None
             )
             for task in background_tasks:
@@ -342,12 +348,10 @@ def create_controller_app(
 
     app.state.discovery = discovery
     app.state.paired_agents = paired
+    app.state.panel = panel
 
     def require_login(request: Request) -> None:
-        if request.session.get("authenticated") is not True:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED, detail="Sign in required"
-            )
+        panel.require(request)
 
     def find_server(server_id: str) -> RemoteServer:
         server = servers.get(server_id)
@@ -396,22 +400,97 @@ def create_controller_app(
 
     @app.get("/api/session")
     async def session(request: Request) -> dict:
+        user = panel.user(request.session)
         return {
-            "authenticated": request.session.get("authenticated") is True,
-            "username": config.web_username
-            if request.session.get("authenticated") is True
-            else None,
+            "authenticated": user is not None,
+            "username": request.session.get("username") if user else None,
+            "admin": bool(user and user["admin"]),
         }
 
     @app.post("/api/login")
     async def login(payload: LoginRequest, request: Request) -> dict:
-        valid_user = hmac.compare_digest(payload.username, config.web_username)
-        valid_password = hmac.compare_digest(payload.password, config.web_password)
-        if not (valid_user and valid_password):
+        user = panel.data["users"].get(payload.username)
+        # Perform a password hash even for unknown usernames.
+        encoded = (user or next(iter(panel.data["users"].values())))["hash"]
+        valid_password = await asyncio.to_thread(password_matches, payload.password, encoded)
+        if not user or not valid_password:
             raise HTTPException(status_code=401, detail="Invalid username or password")
         request.session.clear()
         request.session["authenticated"] = True
+        request.session["username"] = payload.username
+        request.session["version"] = user["version"]
         return {"ok": True}
+
+    @app.get("/api/users")
+    async def list_users(request: Request) -> list[dict]:
+        panel.require(request, admin=True)
+        return [{"username": name, "admin": value["admin"]} for name, value in panel.data["users"].items()]
+
+    @app.post("/api/users", status_code=201)
+    async def add_user(payload: NewUser, request: Request) -> dict:
+        panel.require(request, admin=True)
+        if payload.username in panel.data["users"]:
+            raise HTTPException(409, "Username already exists")
+        panel.put("users", payload.username, panel.account(payload.password, payload.admin))
+        return {"ok": True}
+
+    @app.put("/api/users/{username}/password")
+    async def change_password(username: str, payload: PasswordChange, request: Request) -> dict:
+        actor = panel.require(request)
+        own = username == request.session["username"]
+        if not own and not actor["admin"]:
+            raise HTTPException(403, "Administrator access required")
+        user = panel.data["users"].get(username)
+        if user is None:
+            raise HTTPException(404, "Unknown user")
+        if own and not password_matches(payload.current_password, user["hash"]):
+            raise HTTPException(400, "Current password is incorrect")
+        replacement = panel.account(payload.password, user["admin"])
+        panel.put("users", username, replacement)
+        if own:
+            request.session["version"] = replacement["version"]
+        return {"ok": True}
+
+    @app.get("/api/servers/{server_id}/restart-schedule")
+    async def get_schedule(server_id: str, request: Request) -> dict:
+        require_login(request)
+        find_server(server_id)
+        return panel.data["schedules"].get(server_id, RestartSchedule().model_dump())
+
+    @app.put("/api/servers/{server_id}/restart-schedule")
+    async def save_schedule(server_id: str, payload: RestartSchedule, request: Request) -> dict:
+        require_login(request)
+        find_server(server_id)
+        previous = panel.data["schedules"].get(server_id, {})
+        value = {**payload.model_dump(), **{key: previous[key] for key in ("last_slot", "last_result") if key in previous}}
+        panel.put("schedules", server_id, value)
+        return value
+
+    update_directory = UPDATE_DIRECTORY
+
+    @app.get("/api/manager/update")
+    async def update_status(request: Request) -> dict:
+        panel.require(request, admin=True)
+        enabled = UPDATE_PATH_UNIT.exists()
+        try:
+            result = json.loads((update_directory / "manager-update-status.json").read_text())
+        except FileNotFoundError:
+            result = {"state": "idle"}
+        if (update_directory / "manager-update.request").exists():
+            result = {"state": "running"}
+        return {**result, "enabled": enabled}
+
+    @app.post("/api/manager/update", status_code=202)
+    async def update_manager(request: Request) -> dict:
+        panel.require(request, admin=True)
+        if not UPDATE_PATH_UNIT.exists():
+            raise HTTPException(503, "Install the manager update service on the controller first")
+        try:
+            with (update_directory / "manager-update.request").open("x") as handle:
+                handle.write("update\n")
+        except FileExistsError:
+            raise HTTPException(409, "A manager update is already queued or running")
+        return {"state": "queued"}
 
     @app.post("/api/logout")
     async def logout(request: Request) -> dict:
@@ -830,9 +909,12 @@ def create_controller_app(
                 detail="Deletion confirmation must exactly match the server id",
             )
         try:
-            return await agents.delete_server(
+            result = await agents.delete_server(
                 find_server(server_id), payload.confirmation
             )
+            if server_id in panel.data["schedules"]:
+                panel.put("schedules", server_id, {**panel.data["schedules"][server_id], "enabled": False})
+            return result
         except AgentUnavailable as exc:
             raise agent_file_error(exc) from exc
 

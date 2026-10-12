@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for an authenticated Minecraft Manager update request
+
+[Path]
+PathExists=/var/lib/minecraft-manager/manager-update.request
+Unit=mc-manager-update.service
+
+[Install]
+WantedBy=multi-user.target

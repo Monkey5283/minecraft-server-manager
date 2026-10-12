@@ -1,0 +1,10 @@
+[Unit]
+Description=Update Minecraft Manager independently of the dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/run-minecraft-manager-web-update
+ExecStopPost=/usr/local/sbin/run-minecraft-manager-web-update --finish
+TimeoutStartSec=30min

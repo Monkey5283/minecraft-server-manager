@@ -6,6 +6,7 @@
     <title>Minecraft Server Control</title>
     <link rel="stylesheet" href="/static/style.css" />
     <script src="/static/app.js" defer></script>
+    <script src="/static/panel.js" defer></script>
   </head>
   <body>
     <div class="shell">
@@ -18,6 +19,7 @@
           <span id="last-updated"></span>
           <button id="open-setup" class="secondary" hidden>Add server</button>
           <button id="refresh" class="secondary" hidden>Refresh</button>
+          <button id="account-settings" class="secondary" hidden>Account &amp; manager</button>
           <button id="logout" class="secondary" hidden>Sign out</button>
         </div>
       </header>
@@ -214,6 +216,48 @@
         </section>
       </main>
     </div>
+
+    <dialog id="schedule-dialog" class="management-dialog" aria-labelledby="schedule-title">
+      <form id="schedule-form">
+        <div class="dialog-heading"><h2 id="schedule-title">Restart schedule</h2><button type="button" data-close="schedule-dialog" class="secondary">Close</button></div>
+        <p class="muted">Times use the selected timezone. Offline or busy servers are skipped. The controller must be running; missed restarts are not replayed.</p>
+        <div id="schedule-notice" class="notice" role="status" hidden></div>
+        <label class="checkbox-label"><input id="schedule-enabled" type="checkbox" />Enable scheduled restarts</label>
+        <label>Timezone<input id="schedule-timezone" placeholder="America/Edmonton" required maxlength="100" /></label>
+        <fieldset><legend>Days</legend><div id="schedule-days" class="actions"></div></fieldset>
+        <label>Restart times (24-hour, separated by commas)<input id="schedule-times" placeholder="04:00, 16:00" required /></label>
+        <p id="schedule-result" class="muted"></p>
+        <button type="submit">Save schedule</button>
+      </form>
+    </dialog>
+
+    <dialog id="account-dialog" class="management-dialog" aria-labelledby="account-title">
+      <div class="dialog-heading"><h2 id="account-title">Account &amp; manager</h2><button type="button" data-close="account-dialog" class="secondary">Close</button></div>
+      <p id="account-identity" class="muted"></p>
+      <div id="account-notice" class="notice" role="status" hidden></div>
+      <form id="password-form">
+        <h3>Change your password</h3>
+        <label>Current password<input id="current-password" type="password" autocomplete="current-password" required maxlength="256" /></label>
+        <label>New password (at least 12 characters)<input id="new-password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required /></label>
+        <button type="submit">Change password</button>
+      </form>
+      <section id="admin-settings" hidden>
+        <hr />
+        <h3>Users</h3><div id="users-list" class="agent-list"></div>
+        <form id="add-user-form">
+          <label>Username<input id="add-username" autocomplete="off" pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}" required /></label>
+          <label>Password (at least 12 characters)<input id="add-password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required /></label>
+          <label class="checkbox-label"><input id="add-admin" type="checkbox" />Administrator</label>
+          <p class="muted">Operators can manage all Minecraft servers and schedules. Administrators can also add users, reset passwords, and update the manager.</p>
+          <button type="submit">Add user</button>
+        </form>
+        <hr />
+        <h3>Update manager</h3>
+        <p class="muted">Updates this controller from its configured repository and branch. The panel briefly disconnects while restarting. Minecraft servers and remote agents are not restarted.</p>
+        <p id="manager-update-status" role="status" class="muted"></p>
+        <button id="manager-update" type="button" class="warning">Update manager</button>
+      </section>
+    </dialog>
 
     <template id="server-template">
       <article class="server-card">

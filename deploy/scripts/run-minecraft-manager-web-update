@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $EUID -eq 0 ]] || exit 1
+state_dir=/var/lib/minecraft-manager
+# No arguments or commands are read from the request file.
+if [[ "${1:-}" == "--finish" ]]; then
+  # systemd runs this even after a crash or timeout of the updater.
+  temporary="$(mktemp "$state_dir/.update-status.XXXXXX")"
+  if [[ "${SERVICE_RESULT:-failed}" == "success" ]]; then
+    printf '{"state":"succeeded","message":"Manager is up to date."}\n' >"$temporary"
+  else
+    printf '{"state":"failed","message":"Update failed. See journalctl -u mc-manager-update.service for details."}\n' >"$temporary"
+  fi
+  chmod 0644 "$temporary"
+  mv -fT "$temporary" "$state_dir/manager-update-status.json"
+  rm -f "$state_dir/manager-update.request"
+  exit 0
+fi
+/usr/local/sbin/update-minecraft-manager

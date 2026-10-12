@@ -32,6 +32,44 @@ domain. Routed VLANs require a UDP relay or manual TOML configuration.
 - Optionally monitor a UPS and perform an orderly shutdown
 - Run only allowlisted agent commands without a shell
 
+## Dashboard schedules, accounts, and updates
+
+Each server card has a **Restart schedule** button. Choose weekdays, one or more
+24-hour times (for example `04:00, 16:00`), and an IANA timezone such as
+`America/Edmonton`, then enable and save. The controller checks every ten seconds.
+It skips offline/busy servers and does not replay missed runs after downtime.
+During daylight-saving transitions, nonexistent times are skipped and repeated
+times run only in the first occurrence. The dialog shows the last dispatch result;
+"submitted" means the agent accepted the restart job, not that it completed.
+
+Open **Account & manager** to change your password. The configured web account is
+the initial administrator. Administrators can add operators or other admins and
+reset another user's password. Operators have access to all server controls and
+schedules, but cannot manage users or update the controller. New passwords require
+at least 12 characters. Passwords are stored as salted scrypt hashes, and changing
+a password invalidates that user's other sessions.
+
+Accounts and schedules are saved in `panel-state.json` alongside the configured
+`discovery.agent_registry_file` (normally `/var/lib/minecraft-manager`). Back up
+this file. Once saved, these accounts take precedence over the bootstrap username
+and password in the controller configuration. Existing sessions must sign in again
+when migrating to this version. To recover a lost admin password, stop the
+controller and move the state file to a private backup location, then restart to
+bootstrap the configured account again. This also resets schedules; reconfigure
+them in the panel after recovering access.
+
+**Update manager** updates this controller using its existing configured repository
+and branch. It runs independently of the dashboard, preserves configuration and
+panel state, and reports success/failure when the panel reconnects. It does not
+update remote agents or restart Minecraft servers. The existing updater attempts
+rollback if installation fails. Detailed output is available with
+`journalctl -u mc-manager-update.service`.
+
+Existing installations need one command-line update to install the new systemd
+update service and path watcher: `sudo /usr/local/sbin/update-minecraft-manager --force`.
+New controller installations set these up automatically. The controller retains
+its service sandbox; it requests only the fixed manager update operation.
+
 ## Requirements
 
 - A controller running systemd, Python 3.11 or newer, and a Debian-based Linux

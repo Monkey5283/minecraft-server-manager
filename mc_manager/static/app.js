@@ -90,11 +90,13 @@ async function api(path, options = {}) {
   try {
     body = await response.json();
   } catch {}
-  if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`);
+  if (!response.ok) throw new Error(Array.isArray(body.detail) ? body.detail.map((item) => item.msg).join("; ") : body.detail || `Request failed (${response.status})`);
   return body;
 }
 
 function showLogin() {
+  document.querySelector("#account-settings").hidden = true;
+  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
   stopConsolePolling();
   loginPanel.hidden = false;
   dashboard.hidden = true;
@@ -108,6 +110,7 @@ function showLogin() {
 }
 
 function showDashboard() {
+  document.querySelector("#account-settings").hidden = false;
   stopConsolePolling();
   activeSoftwareServer = null;
   loginPanel.hidden = true;
@@ -483,6 +486,11 @@ function renderServer(server) {
     server.state === "unreachable" ? server.detail : "Agent connected and responding.";
 
   const actions = card.querySelector(".actions");
+  const scheduleButton = document.createElement("button");
+  scheduleButton.textContent = "Restart schedule";
+  scheduleButton.className = "secondary";
+  scheduleButton.addEventListener("click", () => openRestartSchedule(server));
+  actions.append(scheduleButton);
   for (const action of server.actions) {
     const button = document.createElement("button");
     button.textContent = actionLabels[action] || action;
@@ -1185,3 +1193,9 @@ logoutButton.addEventListener("click", async () => {
     showLogin();
   }
 })();
+
+function showDialogNotice(node, message, kind = "info") {
+  node.textContent = message;
+  node.className = `notice ${kind}`;
+  node.hidden = false;
+}

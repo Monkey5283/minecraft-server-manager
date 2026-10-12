@@ -72,6 +72,10 @@ install -m 0644 \
   "/etc/systemd/system/${service_name}"
 
 if [[ "$ROLE" == "controller" ]]; then
+  install -d -o mcmanager -g mcmanager -m 0750 /var/lib/minecraft-manager
+  install -m 0755 "$SOURCE_DIR/deploy/scripts/run-minecraft-manager-web-update" /usr/local/sbin/run-minecraft-manager-web-update
+  install -m 0644 "$SOURCE_DIR/deploy/systemd/mc-manager-update.service" /etc/systemd/system/mc-manager-update.service
+  install -m 0644 "$SOURCE_DIR/deploy/systemd/mc-manager-update.path" /etc/systemd/system/mc-manager-update.path
   install -m 0755 "$SOURCE_DIR/deploy/scripts/update-minecraft-manager-fleet" \
     /usr/local/bin/update-minecraft-manager-fleet
   install -m 0755 "$SOURCE_DIR/deploy/scripts/setup-minecraft-manager-tailscale" \
@@ -141,6 +145,9 @@ PY
 fi
 
 systemctl daemon-reload
+if [[ "$ROLE" == "controller" ]]; then
+  systemctl enable --now mc-manager-update.path
+fi
 systemctl restart "$service_name"
 
 healthy_checks=0
