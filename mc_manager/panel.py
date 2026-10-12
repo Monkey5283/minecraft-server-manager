@@ -1,7 +1,6 @@
 """Persistent dashboard accounts and per-server restart schedules."""
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
 import json
@@ -9,7 +8,6 @@ import logging
 import os
 import re
 import secrets
-from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -45,6 +43,9 @@ class RestartSchedule(BaseModel):
     timezone: str = "UTC"
     days: list[int] = Field(default_factory=lambda: list(range(7)), min_length=1, max_length=7)
     times: list[str] = Field(default_factory=lambda: ["04:00"], min_length=1, max_length=24)
+    warning_seconds: int = Field(default=300, ge=0, le=1800)
+    warning_servers: list[str] = Field(default_factory=list, max_length=64)
+    discord_notify: bool = True
 
     @field_validator("timezone")
     @classmethod
@@ -81,6 +82,8 @@ class PanelStore:
                 RestartSchedule.model_validate(schedule)
         except FileNotFoundError:
             self.data = {"users": {username: self.account(password, True)}, "schedules": {}}
+        for section in ("monitoring", "runtime", "power"):
+            self.data.setdefault(section, {})
 
     @staticmethod
     def account(password, admin):
@@ -111,41 +114,3 @@ class PanelStore:
         if admin and not user["admin"]:
             raise HTTPException(403, "Administrator access required")
         return user
-
-    async def tick(self, agents, servers, now=None):
-        now = now or datetime.now(timezone.utc)
-        for server_id, raw in list(self.data["schedules"].items()):
-            if not raw["enabled"] or server_id not in servers:
-                continue
-            local = now.astimezone(ZoneInfo(raw["timezone"]))
-            slot = local.strftime("%Y-%m-%d %H:%M")
-            # Fold=1 is the repeated DST hour; never restart twice for it.
-            if (local.fold or local.weekday() not in raw["days"]
-                    or local.strftime("%H:%M") not in raw["times"]
-                    or raw.get("last_slot") == slot):
-                continue
-            claimed = {**raw, "last_slot": slot, "last_result": "Checking server"}
-            self.put("schedules", server_id, claimed)  # Persist before dispatch: no duplicate retries.
-            try:
-                state = await agents.status(servers[server_id])
-                # A schedule may have been edited while the status request was in flight.
-                if self.data["schedules"].get(server_id) != claimed:
-                    continue
-                if state.get("state") != "online" or state.get("active_job"):
-                    result = "Skipped: server offline or busy"
-                else:
-                    job = await agents.action(servers[server_id], "restart")
-                    result = f"Restart submitted (job {job.get('id', 'unknown')})"
-            except Exception as exc:
-                LOG.exception("Scheduled restart failed for %s", server_id)
-                result = f"Failed: {exc}"
-            if self.data["schedules"].get(server_id) == claimed:
-                self.put("schedules", server_id, {**claimed, "last_result": result})
-
-    async def run(self, agents, servers):
-        while True:
-            try:
-                await self.tick(agents, servers)
-            except Exception:
-                LOG.exception("Restart scheduler iteration failed")
-            await asyncio.sleep(10)

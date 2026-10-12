@@ -491,6 +491,11 @@ function renderServer(server) {
   scheduleButton.className = "secondary";
   scheduleButton.addEventListener("click", () => openRestartSchedule(server));
   actions.append(scheduleButton);
+  const monitorButton = document.createElement("button");
+  monitorButton.textContent = "Recovery monitor";
+  monitorButton.className = "secondary";
+  monitorButton.addEventListener("click", () => openRecoveryMonitor(server));
+  actions.append(monitorButton);
   for (const action of server.actions) {
     const button = document.createElement("button");
     button.textContent = actionLabels[action] || action;

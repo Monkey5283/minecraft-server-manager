@@ -223,11 +223,37 @@
         <p class="muted">Times use the selected timezone. Offline or busy servers are skipped. The controller must be running; missed restarts are not replayed.</p>
         <div id="schedule-notice" class="notice" role="status" hidden></div>
         <label class="checkbox-label"><input id="schedule-enabled" type="checkbox" />Enable scheduled restarts</label>
-        <label>Timezone<input id="schedule-timezone" placeholder="America/Edmonton" required maxlength="100" /></label>
+        <label>Timezone<select id="schedule-timezone" required></select></label>
         <fieldset><legend>Days</legend><div id="schedule-days" class="actions"></div></fieldset>
         <label>Restart times (24-hour, separated by commas)<input id="schedule-times" placeholder="04:00, 16:00" required /></label>
+        <label>Warn players before restart (seconds)<input id="schedule-warning" type="number" min="0" max="1800" value="300" required /></label>
+        <fieldset><legend>Send player warnings to</legend><div id="schedule-warning-servers" class="agent-list"></div><p class="muted">Leave empty to warn this server. For a Velocity/proxy restart, select the gameplay servers where players are connected.</p></fieldset>
+        <label class="checkbox-label"><input id="schedule-discord" type="checkbox" checked />Send Discord alert after restart</label>
+        <p class="muted">Managed restart script: warn players → countdown → save world and gracefully stop → start → confirm running → Discord alert.</p>
         <p id="schedule-result" class="muted"></p>
         <button type="submit">Save schedule</button>
+        <button id="run-scheduled-restart" type="button" class="warning">Run restart script now</button>
+      </form>
+    </dialog>
+
+    <dialog id="monitor-dialog" class="management-dialog" aria-labelledby="monitor-title">
+      <form id="monitor-form">
+        <div class="dialog-heading"><h2 id="monitor-title">Recovery monitor</h2><button type="button" data-close="monitor-dialog" class="secondary">Close</button></div>
+        <div id="monitor-notice" class="notice" role="status" hidden></div>
+        <label class="checkbox-label"><input id="monitor-enabled" type="checkbox" />Recover unexpected shutdowns automatically</label>
+        <div class="two-column-fields">
+          <label>Check interval (seconds)<input id="monitor-interval" type="number" min="10" max="3600" value="30" required /></label>
+          <label>Consecutive offline checks<input id="monitor-failures" type="number" min="1" max="10" value="2" required /></label>
+          <label>Time between recovery attempts (seconds)<input id="monitor-cooldown" type="number" min="60" max="3600" value="300" required /></label>
+          <label>Maximum restarts per hour<input id="monitor-limit" type="number" min="1" max="12" value="3" required /></label>
+        </div>
+        <label class="checkbox-label"><input id="monitor-power" type="checkbox" checked />Resume previously running servers after a logged power outage</label>
+        <label class="checkbox-label"><input id="monitor-discord" type="checkbox" checked />Send Discord alert after recovery</label>
+        <p class="muted">Stops through this panel, Discord controls, or the panel console are treated as intentional. Pause monitoring before stopping a server directly in a terminal. Unreachable hosts are never treated as confirmed server crashes.</p>
+        <p class="muted">After an outage, recovery waits for the host to return and for 60 seconds of confirmed line power. The host must power on automatically or be switched on; this cannot turn on an unpowered machine.</p>
+        <p id="monitor-status" class="muted" role="status"></p>
+        <p id="monitor-discord-status" class="muted"></p>
+        <button type="submit">Save monitoring settings</button>
       </form>
     </dialog>
 

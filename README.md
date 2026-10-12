@@ -35,12 +35,48 @@ domain. Routed VLANs require a UDP relay or manual TOML configuration.
 ## Dashboard schedules, accounts, and updates
 
 Each server card has a **Restart schedule** button. Choose weekdays, one or more
-24-hour times (for example `04:00, 16:00`), and an IANA timezone such as
-`America/Edmonton`, then enable and save. The controller checks every ten seconds.
+24-hour times (for example `04:00, 16:00`), and a timezone from the worldwide
+dropdown, then enable and save. The controller checks schedules every five seconds.
 It skips offline/busy servers and does not replay missed runs after downtime.
 During daylight-saving transitions, nonexistent times are skipped and repeated
-times run only in the first occurrence. The dialog shows the last dispatch result;
-"submitted" means the agent accepted the restart job, not that it completed.
+times run only in the first occurrence.
+
+Saving a schedule configures a managed restart script for that server. It warns
+players (five minutes by default, configurable from 0 to 1,800 seconds), repeats
+warnings at one minute and ten seconds, requests a world save, uses the agent's
+allowlisted graceful stop command, waits for the stop to complete, then starts
+the server and confirms it is running. Servers with Minecraft Query configured
+must also respond to Query before success is announced. Warning delivery failure
+cancels the restart. Use **Run restart script now** to run the saved workflow.
+The controller must remain available during the countdown; interrupted countdowns
+are skipped, while interrupted stop/start jobs are reconciled after it returns.
+
+For Velocity/proxy schedules, select the gameplay servers as warning destinations;
+Velocity does not provide Minecraft's `say` command. Existing proxy schedules must
+be updated with these destinations before their restart script can run.
+
+Each server also has a **Recovery monitor**, disabled until enabled in the panel.
+Configure its check interval (10–3,600 seconds), consecutive offline checks, retry
+cooldown, hourly restart limit, power recovery, and Discord notifications. Only
+servers previously observed running are eligible for automatic recovery. Unreachable
+agents are not treated as confirmed crashes. Admin stops through the panel, Discord,
+or the panel console persist across controller restarts and prevent recovery until
+an admin explicitly starts the server again. Maintenance jobs pause recovery.
+Pause monitoring before stopping a server directly through SSH/systemctl, because
+such commands bypass the controller's record of admin intent.
+
+UPS events are persisted before protective shutdown actions. Power recovery resumes
+previously running, monitored servers after their hosts return and line power has
+been confirmed continuously for 60 seconds. Host firmware must support power-on
+after an outage, or an admin must switch it on; the controller cannot power on an
+unpowered machine. Both schedules and monitors run inside the existing supervised
+controller service and retain settings and recovery state in `panel-state.json`.
+
+Successful scheduled or recovery restarts send exactly three Discord lines: the
+server name, the actual restart completion time (rendered in the reader's timezone),
+and `The Server has been Restarted.` Failed operations never send a success alert.
+Alerts use the configured announcement channel and can be disabled per schedule
+or monitor. Failed Discord deliveries are retried without restarting the server again.
 
 Open **Account & manager** to change your password. The configured web account is
 the initial administrator. Administrators can add operators or other admins and

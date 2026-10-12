@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
+from zoneinfo import available_timezones
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
@@ -27,6 +28,7 @@ from .discovery import DiscoveryRegistry, listen_for_agents
 from .discord_bot import MinecraftDiscordBot
 from .health import ControllerHealthMonitor
 from .panel import PanelStore, NewUser, PasswordChange, RestartSchedule, password_matches
+from .automation import ServerAutomation, RecoverySettings
 from .player_monitor import PlayerPresenceMonitor
 from .server_registry import (
     ManagedServer,
@@ -143,6 +145,8 @@ def create_controller_app(
         ),
     )
     servers = {server.id: server for server in config.servers}
+    automation = ServerAutomation(panel, agents, servers, bot.announce if hasattr(bot, "announce") else None, ups_enabled=config.ups.enabled)
+    agents.operation_observer = automation.observe_operation
     dynamic_owner: dict[str, str] = {}
     registry_lock = asyncio.Lock()
     player_monitor_holder: list[PlayerPresenceMonitor | None] = [None]
@@ -258,16 +262,17 @@ def create_controller_app(
         )
 
         async def supervise_ups() -> None:
+            def power_status(reading):
+                automation.power_reading(reading)
+                if health_monitor is not None:
+                    health_monitor.update_ups(reading)
+
             while True:
                 monitor = UPSMonitor(
                     config,
                     agents,
                     bot.announce,
-                    status_sink=(
-                        health_monitor.update_ups
-                        if health_monitor is not None
-                        else None
-                    ),
+                    status_sink=power_status,
                 )
                 try:
                     await monitor.run()
@@ -306,7 +311,7 @@ def create_controller_app(
         app.state.player_task = player_task
         app.state.player_monitor = player_monitor
         app.state.discovery_task = discovery_task
-        schedule_task = asyncio.create_task(panel.run(agents, servers))
+        schedule_task = asyncio.create_task(automation.run())
         try:
             yield
         finally:
@@ -349,6 +354,7 @@ def create_controller_app(
     app.state.discovery = discovery
     app.state.paired_agents = paired
     app.state.panel = panel
+    app.state.automation = automation
 
     def require_login(request: Request) -> None:
         panel.require(request)
@@ -455,12 +461,67 @@ def create_controller_app(
     async def get_schedule(server_id: str, request: Request) -> dict:
         require_login(request)
         find_server(server_id)
-        return panel.data["schedules"].get(server_id, RestartSchedule().model_dump())
+        raw = panel.data["schedules"].get(server_id, {})
+        return {**RestartSchedule.model_validate(raw).model_dump(), **raw}
+
+    @app.get("/api/timezones")
+    async def timezones(request: Request) -> list[str]:
+        require_login(request)
+        return sorted(available_timezones())
+
+    @app.get("/api/servers/{server_id}/monitoring")
+    async def monitoring(server_id: str, request: Request) -> dict:
+        require_login(request)
+        find_server(server_id)
+        return {"settings": automation.settings(server_id).model_dump(),
+                "status": automation.state(server_id), "power_paused": automation.blocked(),
+                "discord_configured": config.announcement_channel_id is not None}
+
+    @app.put("/api/servers/{server_id}/monitoring")
+    async def save_monitoring(server_id: str, payload: RecoverySettings, request: Request) -> dict:
+        require_login(request)
+        find_server(server_id)
+        panel.put("monitoring", server_id, payload.model_dump())
+        automation.next_check.pop(server_id, None)
+        return payload.model_dump()
+
+    @app.post("/api/servers/{server_id}/scheduled-restart", status_code=202)
+    async def run_scheduled_restart(server_id: str, request: Request) -> dict:
+        require_login(request)
+        find_server(server_id)
+        schedule = RestartSchedule.model_validate(panel.data["schedules"].get(server_id, {}))
+        if not schedule.enabled:
+            raise HTTPException(409, "Enable and save a restart schedule first")
+        try:
+            automation.allowed(server_id)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if not automation.launch(server_id, automation.clock() + schedule.warning_seconds, schedule):
+            raise HTTPException(409, "A restart script is already running")
+        return {"state": "queued"}
 
     @app.put("/api/servers/{server_id}/restart-schedule")
     async def save_schedule(server_id: str, payload: RestartSchedule, request: Request) -> dict:
         require_login(request)
         find_server(server_id)
+        for warning_server in payload.warning_servers:
+            find_server(warning_server)
+        if payload.enabled:
+            # Proxies do not implement Minecraft's say command: choose gameplay servers.
+            targets = payload.warning_servers or [server_id]
+            for target in targets:
+                if "velocity" in target.lower() or "proxy" in target.lower():
+                    raise HTTPException(400, "For a proxy restart, select gameplay servers as warning destinations")
+                try:
+                    status = await agents.status(find_server(target))
+                except AgentUnavailable as exc:
+                    raise HTTPException(409, "Cannot verify warning destination: " + str(exc)) from exc
+                if status.get("console_enabled") is not True:
+                    raise HTTPException(409, "Player warnings require console access on " + find_server(target).name)
+        task = automation.tasks.get(server_id)
+        if task and (automation.state(server_id).get("pending") or {}).get("stage") == "warning":
+            task.cancel()
+            automation.record(server_id, pending=None, last_result="Countdown canceled after schedule edit")
         previous = panel.data["schedules"].get(server_id, {})
         value = {**payload.model_dump(), **{key: previous[key] for key in ("last_slot", "last_result") if key in previous}}
         panel.put("schedules", server_id, value)

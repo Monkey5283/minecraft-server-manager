@@ -1,8 +1,21 @@
 from __future__ import annotations
 
 import httpx
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from .config import RemoteServer
+
+ACTION_ORIGIN = ContextVar("mc_manager_action_origin", default="admin")
+
+
+@contextmanager
+def action_origin(value):
+    token = ACTION_ORIGIN.set(value)
+    try:
+        yield
+    finally:
+        ACTION_ORIGIN.reset(token)
 
 
 class AgentUnavailable(RuntimeError):
@@ -14,6 +27,7 @@ class AgentUnavailable(RuntimeError):
 class AgentClient:
     def __init__(self, timeout: float = 35.0):
         self.client = httpx.AsyncClient(timeout=timeout)
+        self.operation_observer = None
 
     @staticmethod
     def _headers(server: RemoteServer) -> dict[str, str]:
@@ -29,6 +43,13 @@ class AgentClient:
         json_body: dict | None = None,
         content: bytes | None = None,
     ) -> dict | list:
+        if self.operation_observer and (
+            "/actions/" in path or "/scripts/" in path
+            or path.endswith("/console") and method == "POST"
+            or path.endswith("/software") and method == "PUT"
+            or method == "DELETE"
+        ):
+            self.operation_observer(server, method, path, json_body, ACTION_ORIGIN.get())
         try:
             response = await self.client.request(
                 method,

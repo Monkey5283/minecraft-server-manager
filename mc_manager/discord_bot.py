@@ -319,11 +319,11 @@ class MinecraftDiscordBot(discord.Client):
                 channel_id,
             )
 
-    async def announce(self, message: str) -> None:
+    async def announce(self, message: str) -> bool:
         channel_id = self.config.announcement_channel_id
         if not channel_id:
             LOG.info("Skipping Discord announcement because no channel is configured")
-            return
+            return False
         try:
             if not self.is_ready():
                 await asyncio.wait_for(self.wait_until_ready(), timeout=30)
@@ -334,8 +334,10 @@ class MinecraftDiscordBot(discord.Client):
                 message,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
+            return True
         except (asyncio.TimeoutError, discord.DiscordException, TypeError):
             LOG.exception("Could not send Discord announcement to channel %s", channel_id)
+            return False
 
     async def publish_health(self, snapshot: ControllerHealthSnapshot) -> None:
         self._desired_presence_level = snapshot.level

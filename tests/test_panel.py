@@ -22,7 +22,9 @@ def config(tmp_path):
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
-    monkeypatch.setattr("mc_manager.controller.AgentClient", AsyncMock)
+    agents = AsyncMock()
+    agents.status.return_value = {"state": "online", "console_enabled": True}
+    monkeypatch.setattr("mc_manager.controller.AgentClient", lambda: agents)
     monkeypatch.setattr("mc_manager.controller.MinecraftDiscordBot", lambda *a, **k: object())
     return create_controller_app(config(tmp_path))
 
@@ -69,9 +71,35 @@ async def test_schedule_routes_validation_and_independence(app):
         assert (await client.get(url)).json()["enabled"] is False
         payload = {"enabled": True, "days": [0, 2, 4], "times": ["04:00", "16:00"], "timezone": "America/Edmonton"}
         assert (await client.put(url, json=payload)).status_code == 200
-        assert (await client.get(url)).json() == payload
+        saved = (await client.get(url)).json()
+        assert all(saved[key] == value for key, value in payload.items())
         assert (await client.put(url, json={**payload, "times": ["25:00"]})).status_code == 422
         assert (await client.get("/api/servers/missing/restart-schedule")).status_code == 404
+
+
+async def test_timezone_dropdown_and_monitor_settings(app):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        url = "/api/servers/survival/monitoring"
+        assert (await client.get("/api/timezones")).status_code == 401
+        assert (await client.get(url)).status_code == 401
+        assert (await client.put(url, json={"enabled": True})).status_code == 401
+        await login(client)
+        zones = (await client.get("/api/timezones")).json()
+        assert len(zones) > 400
+        assert {"America/Edmonton", "Asia/Tokyo", "Pacific/Auckland", "UTC"}.issubset(zones)
+        assert (await client.get(url)).json()["settings"]["enabled"] is False
+        assert (await client.put(url, json={"enabled": True, "check_interval_seconds": 20})).status_code == 200
+        assert (await client.get(url)).json()["settings"]["check_interval_seconds"] == 20
+        assert (await client.put(url, json={"check_interval_seconds": 0})).status_code == 422
+        assert (await client.get("/api/servers/missing/monitoring")).status_code == 404
+        assert (await client.post("/api/servers/survival/scheduled-restart")).status_code == 409
+
+
+async def test_unknown_warning_destination_rejected(app):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        await login(client)
+        response = await client.put("/api/servers/survival/restart-schedule", json={"enabled": True, "warning_servers": ["missing"]})
+        assert response.status_code == 404
 
 
 @pytest.mark.parametrize("payload", [{"times": []}, {"days": []}, {"days": [7]}, {"timezone": "../invalid"}, {"times": ["4:00"]}])
@@ -80,61 +108,13 @@ def test_schedule_validation(payload):
         RestartSchedule(**payload)
 
 
-async def test_scheduler_deduplicates_and_persists_claims(tmp_path):
-    path = tmp_path / "panel.json"
-    store = PanelStore(path, "admin", "password")
-    schedule = RestartSchedule(enabled=True, timezone="America/Edmonton", times=["04:00"]).model_dump()
-    store.put("schedules", "survival", schedule)
-    agents = AsyncMock()
-    agents.status.return_value = {"state": "online"}
-    agents.action.return_value = {"id": "job"}
-    servers = {"survival": config(tmp_path).servers[0]}
-    due = datetime(2026, 10, 11, 10, 0, tzinfo=timezone.utc)
-    await store.tick(agents, servers, due)
-    await PanelStore(path, "admin", "password").tick(agents, servers, due)
-    agents.action.assert_awaited_once_with(servers["survival"], "restart")
-    assert "submitted" in store.data["schedules"]["survival"]["last_result"]
-
-
-@pytest.mark.parametrize("state", ["offline", "busy", "unreachable"])
-async def test_scheduler_skips_non_online(tmp_path, state):
-    store = PanelStore(tmp_path / "panel.json", "admin", "password")
-    store.put("schedules", "survival", RestartSchedule(enabled=True).model_dump())
-    agents = AsyncMock()
-    agents.status.return_value = {"state": state}
-    await store.tick(agents, {"survival": config(tmp_path).servers[0]}, datetime(2026, 10, 11, 4, 0, tzinfo=timezone.utc))
-    agents.action.assert_not_awaited()
-
-
-async def test_scheduler_skips_disabled_missed_and_dst_fold(tmp_path):
-    store = PanelStore(tmp_path / "panel.json", "admin", "password")
-    store.put("schedules", "survival", RestartSchedule(enabled=True, timezone="America/Edmonton", times=["01:30"]).model_dump())
-    agents = AsyncMock()
-    servers = {"survival": config(tmp_path).servers[0]}
-    await store.tick(agents, servers, datetime(2026, 11, 1, 8, 30, tzinfo=timezone.utc))
-    await store.tick(agents, servers, datetime(2026, 11, 2, 8, 31, tzinfo=timezone.utc))
-    store.put("schedules", "survival", RestartSchedule(enabled=False).model_dump())
-    await store.tick(agents, servers, datetime(2026, 11, 2, 4, 0, tzinfo=timezone.utc))
-    agents.status.assert_not_awaited()
-
-
-async def test_scheduler_does_not_dispatch_if_claim_cannot_be_saved(tmp_path, monkeypatch):
-    store = PanelStore(tmp_path / "panel.json", "admin", "password")
-    store.put("schedules", "survival", RestartSchedule(enabled=True).model_dump())
-    def fail(data):
-        raise OSError("disk full")
-    monkeypatch.setattr(store, "save", fail)
-    agents = AsyncMock()
-    with pytest.raises(OSError):
-        await store.tick(agents, {"survival": config(tmp_path).servers[0]}, datetime(2026, 10, 11, 4, 0, tzinfo=timezone.utc))
-    agents.action.assert_not_awaited()
-
-
 async def test_update_request_and_result(tmp_path, monkeypatch):
     unit = tmp_path / "update.path"
     monkeypatch.setattr("mc_manager.controller.UPDATE_DIRECTORY", tmp_path)
     monkeypatch.setattr("mc_manager.controller.UPDATE_PATH_UNIT", unit)
-    monkeypatch.setattr("mc_manager.controller.AgentClient", AsyncMock)
+    agents = AsyncMock()
+    agents.status.return_value = {"state": "online", "console_enabled": True}
+    monkeypatch.setattr("mc_manager.controller.AgentClient", lambda: agents)
     monkeypatch.setattr("mc_manager.controller.MinecraftDiscordBot", lambda *a, **k: object())
     app = create_controller_app(config(tmp_path))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -148,19 +128,6 @@ async def test_update_request_and_result(tmp_path, monkeypatch):
         (tmp_path / "manager-update-status.json").write_text('{"state":"failed"}')
         (tmp_path / "manager-update.request").unlink()
         assert (await client.get("/api/manager/update")).json()["state"] == "failed"
-
-
-async def test_scheduler_failure_does_not_retry_same_minute(tmp_path):
-    store = PanelStore(tmp_path / "panel.json", "admin", "password")
-    store.put("schedules", "survival", RestartSchedule(enabled=True).model_dump())
-    agents = AsyncMock()
-    agents.status.side_effect = RuntimeError("agent unavailable")
-    servers = {"survival": config(tmp_path).servers[0]}
-    now = datetime(2026, 10, 11, 4, 0, tzinfo=timezone.utc)
-    await store.tick(agents, servers, now)
-    await store.tick(agents, servers, now)
-    agents.status.assert_awaited_once()
-    assert store.data["schedules"]["survival"]["last_result"].startswith("Failed:")
 
 
 def test_update_service_is_independent_and_installed():

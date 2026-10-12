@@ -6,7 +6,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from .client import AgentClient, AgentUnavailable
+from .client import AgentClient, AgentUnavailable, action_origin
 from .config import ControllerConfig, RemoteServer, UPSConfig
 
 
@@ -432,7 +432,8 @@ class UPSMonitor:
     async def _stop_server(self, server: RemoteServer) -> None:
         try:
             await self.announce(f"🛑 Stopping **{server.name}** because the UPS is on battery.")
-            stop_job = await self.agents.action(server, "stop")
+            with action_origin("power"):
+                stop_job = await self.agents.action(server, "stop")
             await self._wait_for_job(server, stop_job["id"], self.ups.stop_timeout_seconds)
         except AgentUnavailable as exc:
             LOG.warning("UPS sequence could not reach %s: %s", server.id, exc)
@@ -495,7 +496,8 @@ class UPSMonitor:
             f"⏻ Asking the **{host_label}** agent to shut down its host."
         )
         try:
-            job = await self.agents.script(target, script_name)
+            with action_origin("power"):
+                job = await self.agents.script(target, script_name)
             await self._wait_for_job(
                 target,
                 job["id"],
@@ -521,4 +523,3 @@ class UPSMonitor:
             if asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError(f"{server.name}: job {job_id} timed out")
             await self.sleep(2)
-
