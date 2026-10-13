@@ -815,12 +815,56 @@ async function deleteFileEntry(entry) {
   }
 }
 
-function downloadFile(entry) {
-  if (entry.kind === "directory") showFileNotice("Preparing folder ZIP. Large folders may take several minutes; the download starts when ready.", "info");
+async function downloadFile(entry) {
+  const server = activeFileServer;
+  const url = `/api/servers/${server.controller_id}/files/${entry.kind === "directory" ? "archive" : "download"}?path=${encodeURIComponent(entry.path)}`;
+  const name = entry.name + (entry.kind === "directory" ? ".zip" : "");
+  if (window.showSaveFilePicker) {
+    let output;
+    let response;
+    try {
+      const destination = await window.showSaveFilePicker({ suggestedName: name });
+      showFileNotice(`Preparing ${name}. Large folders can take several minutes.`, "info");
+      response = await fetch(url);
+      if (!response.ok) {
+        let error = {};
+        try { error = await response.json(); } catch {}
+        throw new Error(error.detail || `Download failed (${response.status}).`);
+      }
+      output = await destination.createWritable();
+      const reader = response.body.getReader();
+      const total = Number(response.headers.get("Content-Length")) || 0;
+      let received = 0, lastUpdate = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          await output.write(value);
+          received += value.length;
+          if (Date.now() - lastUpdate > 300) {
+            if (activeFileServer === server) showFileNotice(`Downloading ${name}: ${formatBytes(received)}${total ? ` / ${formatBytes(total)}` : ""}`, "info");
+            lastUpdate = Date.now();
+          }
+        }
+      } finally {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+      if (total && received !== total) throw new Error("Download was interrupted. Please try again.");
+      await output.close();
+      output = null;
+      if (activeFileServer === server) showFileNotice(`Downloaded ${name} (${formatBytes(received)}).`, "success");
+    } catch (error) {
+      if (output) await output.abort().catch(() => {});
+      if (response?.body && !response.body.locked) await response.body.cancel().catch(() => {});
+      if (error.name !== "AbortError") showFileNotice(error.message, "error");
+    }
+    return;
+  }
+  if (entry.kind === "directory") showFileNotice("Preparing folder ZIP. Large folders may take several minutes; please avoid starting another folder download until it finishes.", "info");
   const link = document.createElement("a");
-  link.href =
-    `/api/servers/${activeFileServer.controller_id}/files/${entry.kind === "directory" ? "archive" : "download"}?path=${encodeURIComponent(entry.path)}`;
-  link.download = entry.name + (entry.kind === "directory" ? ".zip" : "");
+  link.href = url;
+  link.download = name;
   document.body.append(link);
   link.click();
   link.remove();
