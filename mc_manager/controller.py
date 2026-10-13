@@ -29,6 +29,8 @@ from .discord_bot import MinecraftDiscordBot
 from .health import ControllerHealthMonitor
 from .panel import PanelStore, NewUser, PasswordChange, RestartSchedule, password_matches
 from .automation import ServerAutomation, RecoverySettings
+from .folder_transfer import build_folder_archive
+from .file_manager import FileManagerError, ManagedDownload
 from .player_monitor import PlayerPresenceMonitor
 from .server_registry import (
     ManagedServer,
@@ -994,6 +996,40 @@ def create_controller_app(
             return await agents.file_content(find_server(server_id), path)
         except AgentUnavailable as exc:
             raise agent_file_error(exc) from exc
+
+    folder_download_lock = asyncio.Lock()
+
+    @app.get("/api/servers/{server_id}/files/archive")
+    async def download_folder(server_id: str, request: Request, path: str = ""):
+        require_login(request)
+        server = find_server(server_id)
+        if folder_download_lock.locked():
+            raise HTTPException(409, "Another folder download is in progress; try again shortly")
+        await folder_download_lock.acquire()
+        try:
+            handle, name, size = await build_folder_archive(agents, server, path)
+        except BaseException as exc:
+            folder_download_lock.release()
+            if isinstance(exc, AgentUnavailable):
+                raise agent_file_error(exc) from exc
+            if isinstance(exc, FileManagerError):
+                raise HTTPException(exc.status_code, str(exc)) from exc
+            raise
+        download = ManagedDownload(path, name, size, handle)
+
+        async def stream():
+            try:
+                while chunk := await asyncio.to_thread(handle.read, 1024 * 1024):
+                    yield chunk
+            finally:
+                download.close()
+                folder_download_lock.release()
+
+        return StreamingResponse(stream(), media_type="application/zip", headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(name, safe='')}",
+            "Content-Length": str(size), "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        })
 
     @app.get("/api/servers/{server_id}/files/download")
     async def download_file(

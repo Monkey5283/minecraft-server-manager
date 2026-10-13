@@ -772,10 +772,10 @@ function createFileRow(entry) {
     : "—";
   const entryActions = document.createElement("div");
   entryActions.className = "file-entry-actions";
-  if (entry.kind === "file") {
+  if (entry.name !== "..") {
     const downloadButton = document.createElement("button");
     downloadButton.className = "secondary file-download";
-    downloadButton.textContent = "Download";
+    downloadButton.textContent = entry.kind === "directory" ? "Download ZIP" : "Download";
     downloadButton.addEventListener("click", () => downloadFile(entry));
     entryActions.append(downloadButton);
   }
@@ -816,10 +816,11 @@ async function deleteFileEntry(entry) {
 }
 
 function downloadFile(entry) {
+  if (entry.kind === "directory") showFileNotice("Preparing folder ZIP. Large folders may take several minutes; the download starts when ready.", "info");
   const link = document.createElement("a");
   link.href =
-    `/api/servers/${activeFileServer.controller_id}/files/download?path=${encodeURIComponent(entry.path)}`;
-  link.download = entry.name;
+    `/api/servers/${activeFileServer.controller_id}/files/${entry.kind === "directory" ? "archive" : "download"}?path=${encodeURIComponent(entry.path)}`;
+  link.download = entry.name + (entry.kind === "directory" ? ".zip" : "");
   document.body.append(link);
   link.click();
   link.remove();
@@ -951,6 +952,82 @@ async function restartFileServer(alreadyConfirmed = false) {
     restartFromFilesButton.disabled = false;
   }
 }
+
+const folderUploadButton = document.querySelector("#upload-folder");
+const folderUploadInput = document.querySelector("#upload-folder-input");
+
+async function uploadFolder(files, directories, server = activeFileServer, directory = currentDirectory) {
+  const base = `/api/servers/${server.controller_id}/files`;
+  let completed = 0;
+  folderUploadButton.disabled = true;
+  try {
+    const paths = [...directories, ...files.map(item => item.path)];
+    if (!paths.length) return;
+    for (const path of paths) {
+      if (!path.split("/").every(validEntryName)) throw new Error(`Unsupported path: ${path}`);
+    }
+    for (const item of files) {
+      if (item.file.size > currentFileLimits.max_upload_size_bytes) {
+        throw new Error(`${item.path} exceeds the per-file upload limit (${formatBytes(currentFileLimits.max_upload_size_bytes)}).`);
+      }
+    }
+    // Create the root first, without overwriting or merging an existing tree.
+    for (const path of [...directories].sort((a, b) => a.split("/").length - b.split("/").length)) {
+      await api(`${base}/directory`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: joinFilePath(directory, path) }) });
+    }
+    for (const item of files) {
+      if (activeFileServer === server) showFileNotice(`Uploading folder: ${completed}/${files.length} files — ${item.path}`, "info");
+      await api(`${base}/upload?path=${encodeURIComponent(joinFilePath(directory, item.path))}&overwrite=false`, {
+        method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body: item.file,
+      });
+      completed += 1;
+    }
+    if (activeFileServer === server) showFileNotice(`Folder uploaded: ${completed} files, ${directories.size} folders.`, "success");
+  } catch (error) {
+    showFileNotice(`Folder upload stopped (${completed}/${files.length} files uploaded). ${error.message} Completed files remain on the server; existing folders are never overwritten.`, "error");
+  } finally {
+    folderUploadButton.disabled = false;
+    if (activeFileServer === server && currentDirectory === directory) await loadDirectory(directory);
+  }
+}
+
+folderUploadButton.addEventListener("click", async () => {
+  if (!window.showDirectoryPicker) {
+    folderUploadInput.click();
+    return;
+  }
+  const server = activeFileServer, directory = currentDirectory;
+  folderUploadButton.disabled = true;
+  try {
+    const root = await window.showDirectoryPicker();
+    const files = [], directories = new Set();
+    async function collect(handle, path) {
+      directories.add(path);
+      for await (const child of handle.values()) {
+        const childPath = `${path}/${child.name}`;
+        if (child.kind === "directory") await collect(child, childPath);
+        else files.push({ path: childPath, file: await child.getFile() });
+      }
+    }
+    await collect(root, root.name);
+    await uploadFolder(files, directories, server, directory);
+  } catch (error) {
+    if (error.name !== "AbortError") showFileNotice(error.message, "error");
+  } finally {
+    folderUploadButton.disabled = false;
+  }
+});
+folderUploadInput.addEventListener("change", async () => {
+  const files = [...folderUploadInput.files].map(file => ({ path: file.webkitRelativePath, file }));
+  folderUploadInput.value = "";
+  const directories = new Set();
+  for (const { path } of files) {
+    const parts = path.split("/");
+    for (let i = 1; i < parts.length; i++) directories.add(parts.slice(0, i).join("/"));
+  }
+  await uploadFolder(files, directories);
+});
 
 async function uploadSelectedFile() {
   const file = uploadInput.files[0];
