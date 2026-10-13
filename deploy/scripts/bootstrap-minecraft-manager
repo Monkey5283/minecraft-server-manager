@@ -152,6 +152,9 @@ else
     "${source_dir}/deploy/sudoers/minecraft-manager-provisioning" \
     /etc/sudoers.d/minecraft-manager-provisioning
   visudo -cf /etc/sudoers.d/minecraft-manager-provisioning
+  install -o root -g root -m 0755 "${source_dir}/deploy/scripts/read-minecraft-file" /usr/local/sbin/read-minecraft-file
+  install -o root -g root -m 0440 "${source_dir}/deploy/sudoers/minecraft-manager-file-read" /etc/sudoers.d/minecraft-manager-file-read
+  visudo -cf /etc/sudoers.d/minecraft-manager-file-read
   service_name="mc-manager-agent.service"
 fi
 

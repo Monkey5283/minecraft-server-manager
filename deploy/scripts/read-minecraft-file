@@ -1,0 +1,38 @@
+#!/usr/bin/python3 -I
+"""Read a regular server file as minecraft, without following any symlinks."""
+import os
+import re
+import stat
+import sys
+
+
+def main():
+    if len(sys.argv) != 3 or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", sys.argv[1]):
+        raise ValueError("Invalid server")
+    parts = sys.argv[2].split("/")
+    if any(not p or p in {".", ".."} or "\\" in p or any(ord(c) < 32 for c in p) for p in parts):
+        raise ValueError("Invalid path")
+    fd = os.open("/srv/minecraft", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in [sys.argv[1], *parts[:-1]]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        source = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        with os.fdopen(source, "rb") as handle:
+            metadata = os.fstat(handle.fileno())
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("Only regular files can be downloaded")
+            sys.stdout.buffer.write(str(metadata.st_size).encode() + b"\n")
+            sys.stdout.buffer.flush()
+            while chunk := handle.read(1024 * 1024):
+                sys.stdout.buffer.write(chunk)
+    finally:
+        os.close(fd)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError):
+        sys.exit(1)

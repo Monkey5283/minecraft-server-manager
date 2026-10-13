@@ -4,6 +4,7 @@ import errno
 import hashlib
 import os
 import stat
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -50,6 +51,7 @@ class ManagedDownload:
     name: str
     size: int
     handle: BinaryIO
+    process: subprocess.Popen | None = None
 
     def iter_chunks(self, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
         try:
@@ -61,6 +63,10 @@ class ManagedDownload:
     def close(self) -> None:
         if not self.handle.closed:
             self.handle.close()
+        if self.process is not None:
+            if self.process.poll() is None:
+                self.process.terminate()
+            self.process.wait()
 
 
 class ServerFileManager:
@@ -190,6 +196,23 @@ class ServerFileManager:
             file_descriptor = -1
         except FileManagerError:
             raise
+        except PermissionError as exc:
+            # Minecraft creates replacement level.dat files with mode 0600.
+            # A narrowly scoped helper reads as their owner without changing modes.
+            if self.root.parent != Path("/srv/minecraft") or not Path("/usr/local/sbin/read-minecraft-file").is_file():
+                raise self._translate_os_error(exc, "Could not download file") from exc
+            process = subprocess.Popen(
+                ["sudo", "-n", "-u", "minecraft", "/usr/local/sbin/read-minecraft-file", self.root.name, normalized],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+            header = process.stdout.readline(32)
+            if not header.endswith(b"\n") or not header.strip().isdigit():
+                process.stdout.close()
+                if process.poll() is None:
+                    process.terminate()
+                process.wait()
+                raise FileAccessDenied("Could not download file: permission denied") from exc
+            return ManagedDownload(normalized, PurePosixPath(normalized).name, int(header), process.stdout, process)
         except OSError as exc:
             raise self._translate_os_error(exc, "Could not download file") from exc
         finally:
