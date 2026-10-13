@@ -35,6 +35,21 @@ async def test_archive_preserves_nested_empty_directories_and_binary_files():
         handle.close()
 
 
+async def test_archive_uses_disk_directory_and_rejects_low_space(monkeypatch, tmp_path):
+    import tempfile
+    from unittest.mock import Mock
+    from mc_manager.folder_transfer import ArchiveStorageError
+    real_temporary_file = tempfile.TemporaryFile
+    create = Mock(side_effect=real_temporary_file)
+    monkeypatch.setattr('mc_manager.folder_transfer.tempfile.TemporaryFile', create)
+    handle, _, _ = await build_folder_archive(agent(), controller_config().servers[0], 'world', directory=tmp_path)
+    handle.close()
+    create.assert_called_once_with(dir=tmp_path)
+    monkeypatch.setattr('mc_manager.folder_transfer.shutil.disk_usage', lambda path: Mock(free=1))
+    with pytest.raises(ArchiveStorageError):
+        await build_folder_archive(agent(), controller_config().servers[0], 'world', directory=tmp_path)
+
+
 @pytest.mark.parametrize("name", ["../secret", "..", "/etc", "a\\b"])
 async def test_archive_rejects_unsafe_entries(name):
     agents = agent()

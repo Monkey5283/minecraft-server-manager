@@ -1007,7 +1007,11 @@ def create_controller_app(
             raise HTTPException(409, "Another folder download is in progress; try again shortly")
         await folder_download_lock.acquire()
         try:
-            handle, name, size = await build_folder_archive(agents, server, path)
+            # StateDirectory is disk-backed and writable inside the service sandbox.
+            # /tmp may be a small RAM filesystem and cannot hold world archives.
+            archive_directory = config.agent_registry_file.parent / "downloads"
+            archive_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            handle, name, size = await build_folder_archive(agents, server, path, directory=archive_directory)
         except BaseException as exc:
             folder_download_lock.release()
             if isinstance(exc, AgentUnavailable):
