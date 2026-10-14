@@ -808,4 +808,3 @@ class MinecraftDiscordBot(discord.Client):
             state = "unknown"
         icon = STATUS_ICONS.get(state, STATUS_ICONS["unknown"])
         return f"{icon} **{server.name}** — {state}"
-

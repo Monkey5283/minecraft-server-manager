@@ -534,7 +534,467 @@ def create_controller_app(
         previous = panel.data["schedules"].get(server_id, {})
         value = {**payload.model_dump(), **{key: previous[key] for key in ("last_slot", "last_result") if key in previous}}
         panel.put("schedules", server_id, value)
-   …4853 tokens truncated…         raise agent_file_error(exc) from exc
+        return value
+
+    update_directory = UPDATE_DIRECTORY
+
+    @app.get("/api/manager/update")
+    async def update_status(request: Request) -> dict:
+        panel.require(request, admin=True)
+        enabled = UPDATE_PATH_UNIT.exists()
+        try:
+            result = json.loads((update_directory / "manager-update-status.json").read_text())
+        except FileNotFoundError:
+            result = {"state": "idle"}
+        if (update_directory / "manager-update.request").exists():
+            result = {"state": "running"}
+        return {**result, "enabled": enabled}
+
+    @app.post("/api/manager/update", status_code=202)
+    async def update_manager(request: Request) -> dict:
+        panel.require(request, admin=True)
+        if not UPDATE_PATH_UNIT.exists():
+            raise HTTPException(503, "Install the manager update service on the controller first")
+        try:
+            with (update_directory / "manager-update.request").open("x") as handle:
+                handle.write("update\n")
+        except FileExistsError:
+            raise HTTPException(409, "A manager update is already queued or running")
+        return {"state": "queued"}
+
+    @app.post("/api/logout")
+    async def logout(request: Request) -> dict:
+        request.session.clear()
+        return {"ok": True}
+
+    @app.get("/api/server-registry")
+    async def server_registry(request: Request) -> dict:
+        require_login(request)
+        managed_ids = set(registry.entries)
+        return {
+            "configured": [
+                {
+                    "id": server.id,
+                    "name": server.name,
+                    "track_players": server.track_players,
+                    "managed": server.id in managed_ids,
+                    "source_server_id": (
+                        registry.entries[server.id].source_server_id
+                        if server.id in managed_ids
+                        else server.id
+                    ),
+                }
+                for server in base_servers + registry.materialized()
+            ]
+        }
+
+    @app.get("/api/server-registry/discover")
+    async def discover_servers(request: Request) -> dict:
+        require_login(request)
+        sources = unique_agent_sources()
+        results = await asyncio.gather(
+            *(agents.statuses(source) for source in sources),
+            return_exceptions=True,
+        )
+        candidates: list[dict] = []
+        unavailable: list[dict] = []
+        registered_ids = set(servers)
+        discovered_ids: set[str] = set()
+        for source, result in zip(sources, results, strict=True):
+            if isinstance(result, BaseException):
+                unavailable.append(
+                    {"source_server_id": source.id, "detail": str(result)}
+                )
+                continue
+            for server_id, entry in result.items():
+                if server_id in registered_ids or server_id in discovered_ids:
+                    continue
+                discovered_ids.add(server_id)
+                candidates.append(
+                    {
+                        "id": server_id,
+                        "name": str(entry.get("name") or server_id),
+                        "state": str(entry.get("state") or "unknown"),
+                        "files_enabled": bool(entry.get("files_enabled", False)),
+                        "player_tracking_available": bool(
+                            entry.get("player_tracking_available", False)
+                        ),
+                        "source_server_id": source.id,
+                        "source_name": source.name,
+                    }
+                )
+        candidates.sort(key=lambda item: (item["name"].casefold(), item["id"]))
+        return {"candidates": candidates, "unavailable": unavailable}
+
+    @app.post("/api/server-registry")
+    async def register_server(
+        payload: ServerRegistrationRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        async with registry_lock:
+            if payload.server_id in servers:
+                raise HTTPException(status_code=409, detail="Server is already registered")
+            _source, agent_entry = await confirm_agent_server(
+                payload.source_server_id, payload.server_id
+            )
+            if payload.track_players and not agent_entry.get(
+                "player_tracking_available", False
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Player tracking is not configured on that agent server",
+                )
+            try:
+                server = registry.add(
+                    ManagedServer(
+                        id=payload.server_id,
+                        name=payload.name,
+                        source_server_id=payload.source_server_id,
+                        track_players=payload.track_players,
+                    )
+                )
+            except ServerRegistryError as exc:
+                raise registry_error(exc) from exc
+            sync_runtime_servers()
+        return {"ok": True, "id": server.id, "name": server.name}
+
+    @app.put("/api/server-registry/{server_id}")
+    async def update_registered_server(
+        server_id: str, payload: ServerRegistrationUpdate, request: Request
+    ) -> dict:
+        require_login(request)
+        async with registry_lock:
+            current = registry.entries.get(server_id)
+            if current is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Servers from controller.toml cannot be edited here",
+                )
+            if payload.track_players and not current.track_players:
+                _source, agent_entry = await confirm_agent_server(
+                    current.source_server_id, server_id
+                )
+                if not agent_entry.get("player_tracking_available", False):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Player tracking is not configured on that agent server",
+                    )
+            try:
+                server = registry.update(
+                    server_id,
+                    name=payload.name,
+                    track_players=payload.track_players,
+                )
+            except ServerRegistryError as exc:
+                raise registry_error(exc) from exc
+            sync_runtime_servers()
+        return {"ok": True, "id": server.id, "name": server.name}
+
+    @app.post("/api/server-registry/{server_id}/remove")
+    async def remove_registered_server(
+        server_id: str, payload: ServerRemovalRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        if not hmac.compare_digest(payload.confirm_id, server_id):
+            raise HTTPException(status_code=400, detail="Server id confirmation did not match")
+        async with registry_lock:
+            try:
+                registry.remove(server_id)
+            except ServerRegistryError as exc:
+                raise registry_error(exc) from exc
+            sync_runtime_servers()
+        return {"ok": True, "id": server_id}
+
+    @app.get("/api/agents/discovered")
+    async def discovered_agents(request: Request) -> list[dict]:
+        require_login(request)
+        return [
+            {
+                **agent.as_public_dict(),
+                "paired": agent.id in paired.agents,
+            }
+            for agent in discovery.list()
+        ]
+
+    @app.get("/api/agents")
+    async def paired_agents(request: Request) -> list[dict]:
+        require_login(request)
+        return [
+            {
+                "id": agent.id,
+                "name": agent.name,
+                "url": agent.url,
+                "servers": [
+                    {
+                        "id": server.id,
+                        "name": server.name,
+                        "track_players": server.track_players,
+                    }
+                    for server in agent.servers
+                ],
+            }
+            for agent in paired.agents.values()
+        ]
+
+    @app.get("/api/agents/configured")
+    async def configured_agents(request: Request) -> list[dict]:
+        require_login(request)
+        result: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        paired_credentials = {
+            (agent.url.rstrip("/"), agent.token) for agent in paired.agents.values()
+        }
+        for server in base_servers:
+            credentials = (server.agent_url.rstrip("/"), server.token)
+            if credentials in seen:
+                continue
+            seen.add(credentials)
+            result.append(
+                {
+                    "source_server_id": server.id,
+                    "name": server.name,
+                    "url": credentials[0],
+                    "paired": credentials in paired_credentials,
+                }
+            )
+        return result
+
+    @app.post("/api/agents/adopt")
+    async def adopt_configured_agent(
+        payload: AdoptAgentRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        source = base_server_map.get(payload.source_server_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="Unknown configured server")
+        try:
+            info = await agents.info(source)
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        agent_id = str(info.get("id", "")).strip()
+        if not agent_id or len(agent_id) > 128:
+            raise HTTPException(status_code=502, detail="Agent returned an invalid identity")
+        if not bool(info.get("provisioning_enabled", False)):
+            raise HTTPException(status_code=409, detail="Agent provisioning is disabled")
+        candidate = PairedAgent(
+            id=agent_id,
+            name=str(info.get("name", source.name)),
+            url=source.agent_url.rstrip("/"),
+            token=source.token,
+        )
+        sync_paired_agent(candidate, info)
+        paired.put(candidate)
+        sync_runtime_servers()
+        return {"ok": True, "id": candidate.id, "name": candidate.name}
+
+    @app.post("/api/agents/pair")
+    async def pair_agent(payload: PairAgentRequest, request: Request) -> dict:
+        require_login(request)
+        discovered = discovery.get(payload.agent_id)
+        if discovered is None:
+            raise HTTPException(status_code=404, detail="Agent is no longer visible on the LAN")
+        candidate = PairedAgent(
+            id=payload.agent_id,
+            name=discovered.name,
+            url=discovered.url,
+            token=payload.token.strip(),
+        )
+        if not candidate.token:
+            raise HTTPException(status_code=400, detail="Agent token is required")
+        try:
+            info = await agents.info(remote_for_agent(candidate))
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if str(info.get("id")) != candidate.id:
+            raise HTTPException(status_code=409, detail="Agent identity changed during pairing")
+        candidate.name = str(info.get("name", candidate.name))
+        sync_paired_agent(candidate, info)
+        paired.put(candidate)
+        sync_runtime_servers()
+        return {"ok": True, "id": candidate.id, "name": candidate.name}
+
+    def find_agent(agent_id: str) -> PairedAgent:
+        agent = paired.get(agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Unknown or unpaired agent")
+        return agent
+
+    async def refresh_paired_agent_inventory() -> None:
+        paired_agents = tuple(paired.agents.values())
+        if not paired_agents:
+            return
+        results = await asyncio.gather(
+            *(agents.info(remote_for_agent(agent)) for agent in paired_agents),
+            return_exceptions=True,
+        )
+        async with registry_lock:
+            for agent, info in zip(paired_agents, results, strict=True):
+                if isinstance(info, Exception):
+                    continue
+                previous = [
+                    (server.id, server.name, server.track_players)
+                    for server in agent.servers
+                ]
+                try:
+                    sync_paired_agent(agent, info)
+                except HTTPException as exc:
+                    LOG.warning(
+                        "Could not refresh paired agent %s: %s",
+                        agent.id,
+                        exc.detail,
+                    )
+                    continue
+                current = [
+                    (server.id, server.name, server.track_players)
+                    for server in agent.servers
+                ]
+                if current != previous:
+                    paired.put(agent)
+
+    @app.get("/api/agents/{agent_id}/catalog/{server_type}")
+    async def agent_catalog(agent_id: str, server_type: str, request: Request) -> dict:
+        require_login(request)
+        try:
+            return await agents.catalog(remote_for_agent(find_agent(agent_id)), server_type)
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/api/agents/{agent_id}/servers")
+    async def provision_server(
+        agent_id: str,
+        payload: ProvisionServerRequest,
+        request: Request,
+    ) -> dict:
+        require_login(request)
+        if payload.id in servers:
+            raise HTTPException(status_code=409, detail="Server id is already configured")
+        try:
+            return await agents.provision(
+                remote_for_agent(find_agent(agent_id)), payload.model_dump()
+            )
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/agents/{agent_id}/jobs/{job_id}")
+    async def provisioning_job(
+        agent_id: str,
+        job_id: str,
+        request: Request,
+    ) -> dict:
+        require_login(request)
+        agent = find_agent(agent_id)
+        try:
+            result = await agents.job(remote_for_agent(agent), job_id)
+            if result.get("state") == "succeeded":
+                info = await agents.info(remote_for_agent(agent))
+                sync_paired_agent(agent, info)
+                paired.put(agent)
+            return result
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/servers")
+    async def list_servers(request: Request) -> list[dict]:
+        require_login(request)
+        await refresh_paired_agent_inventory()
+
+        async def get_status(server: RemoteServer) -> dict:
+            try:
+                result = await agents.status(server)
+                result["controller_id"] = server.id
+                result["name"] = server.name
+                result["managed_registration"] = server.id in registry.entries
+                result["deletion_enabled"] = bool(
+                    result.get("deletion_enabled", False)
+                )
+                return result
+            except AgentUnavailable as exc:
+                return {
+                    "id": server.id,
+                    "controller_id": server.id,
+                    "name": server.name,
+                    "state": "unreachable",
+                    "detail": str(exc),
+                    "actions": [],
+                    "scripts": [],
+                    "managed_registration": server.id in registry.entries,
+                    "deletion_enabled": False,
+                }
+
+        current_servers = tuple(servers.values())
+        return list(await asyncio.gather(*(get_status(item) for item in current_servers)))
+
+    @app.post("/api/servers/{server_id}/actions/{action}")
+    async def action(server_id: str, action: str, request: Request) -> dict:
+        require_login(request)
+        if action not in {"start", "stop", "restart", "update"}:
+            raise HTTPException(status_code=404, detail="Unsupported action")
+        try:
+            return await agents.action(find_server(server_id), action)
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/api/servers/{server_id}/scripts/{script_name}")
+    async def script(server_id: str, script_name: str, request: Request) -> dict:
+        require_login(request)
+        try:
+            return await agents.script(find_server(server_id), script_name)
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/servers/{server_id}/catalog/{server_type}")
+    async def server_catalog(
+        server_id: str, server_type: str, request: Request
+    ) -> dict:
+        require_login(request)
+        try:
+            return await agents.catalog(find_server(server_id), server_type)
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.post("/api/servers/{server_id}/software")
+    async def change_server_software(
+        server_id: str,
+        payload: SoftwareChangeRequest,
+        request: Request,
+    ) -> dict:
+        require_login(request)
+        try:
+            return await agents.change_software(
+                find_server(server_id), payload.model_dump()
+            )
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+    @app.delete("/api/servers/{server_id}")
+    async def delete_server(
+        server_id: str,
+        payload: DeleteServerRequest,
+        request: Request,
+    ) -> dict:
+        require_login(request)
+        if not hmac.compare_digest(payload.confirmation, server_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Deletion confirmation must exactly match the server id",
+            )
+        try:
+            result = await agents.delete_server(
+                find_server(server_id), payload.confirmation
+            )
+            if server_id in panel.data["schedules"]:
+                panel.put("schedules", server_id, {**panel.data["schedules"][server_id], "enabled": False})
+            return result
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+    @app.get("/api/servers/{server_id}/files")
+    async def files(server_id: str, request: Request, path: str = "") -> dict:
+        require_login(request)
+        try:
+            return await agents.files(find_server(server_id), path)
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
 
     @app.get("/api/servers/{server_id}/files/content")
     async def file_content(server_id: str, path: str, request: Request) -> dict:
@@ -777,4 +1237,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

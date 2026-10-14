@@ -597,4 +597,3 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
             )
         ),
     )
-
