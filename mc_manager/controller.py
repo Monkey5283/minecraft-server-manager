@@ -534,62 +534,232 @@ def create_controller_app(
         previous = panel.data["schedules"].get(server_id, {})
         value = {**payload.model_dump(), **{key: previous[key] for key in ("last_slot", "last_result") if key in previous}}
         panel.put("schedules", server_id, value)
-        return value
+   …4853 tokens truncated…         raise agent_file_error(exc) from exc
 
-    update_directory = UPDATE_DIRECTORY
-
-    @app.get("/api/manager/update")
-    async def update_status(request: Request) -> dict:
-        panel.require(request, admin=True)
-        enabled = UPDATE_PATH_UNIT.exists()
-        try:
-            result = json.loads((update_directory / "manager-update-status.json").read_text())
-        except FileNotFoundError:
-            result = {"state": "idle"}
-        if (update_directory / "manager-update.request").exists():
-            result = {"state": "running"}
-        return {**result, "enabled": enabled}
-
-    @app.post("/api/manager/update", status_code=202)
-    async def update_manager(request: Request) -> dict:
-        panel.require(request, admin=True)
-        if not UPDATE_PATH_UNIT.exists():
-            raise HTTPException(503, "Install the manager update service on the controller first")
-        try:
-            with (update_directory / "manager-update.request").open("x") as handle:
-                handle.write("update\n")
-        except FileExistsError:
-            raise HTTPException(409, "A manager update is already queued or running")
-        return {"state": "queued"}
-
-    @app.post("/api/logout")
-    async def logout(request: Request) -> dict:
-        request.session.clear()
-        return {"ok": True}
-
-    @app.get("/api/server-registry")
-    async def server_registry(request: Request) -> dict:
+    @app.get("/api/servers/{server_id}/files/content")
+    async def file_content(server_id: str, path: str, request: Request) -> dict:
         require_login(request)
-        managed_ids = set(registry.entries)
-        return {
-            "configured": [
-                {
-                    "id": server.id,
-                    "name": server.name,
-                    "track_players": server.track_players,
-                    "managed": server.id in managed_ids,
-                    "source_server_id": (
-                        registry.entries[server.id].source_server_id
-                        if server.id in managed_ids
-                        else server.id
-                    ),
-                }
-                for server in base_servers + registry.materialized()
-            ]
-        }
+        try:
+            return await agents.file_content(find_server(server_id), path)
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
 
-    @app.get("/api/server-registry/discover")
-    async def discover_servers(request:…6666 tokens truncated…arse_args()
+    folder_download_lock = asyncio.Lock()
+
+    @app.get("/api/servers/{server_id}/files/archive")
+    async def download_folder(server_id: str, request: Request, path: str = ""):
+        require_login(request)
+        server = find_server(server_id)
+        if folder_download_lock.locked():
+            raise HTTPException(409, "Another folder download is in progress; try again shortly")
+        await folder_download_lock.acquire()
+        try:
+            # StateDirectory is disk-backed and writable inside the service sandbox.
+            # /tmp may be a small RAM filesystem and cannot hold world archives.
+            archive_directory = config.agent_registry_file.parent / "downloads"
+            archive_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            handle, name, size = await build_folder_archive(agents, server, path, directory=archive_directory)
+        except BaseException as exc:
+            folder_download_lock.release()
+            if isinstance(exc, AgentUnavailable):
+                raise agent_file_error(exc) from exc
+            if isinstance(exc, FileManagerError):
+                raise HTTPException(exc.status_code, str(exc)) from exc
+            raise
+        download = ManagedDownload(path, name, size, handle)
+
+        async def stream():
+            try:
+                while chunk := await asyncio.to_thread(handle.read, 1024 * 1024):
+                    yield chunk
+            finally:
+                download.close()
+                folder_download_lock.release()
+
+        return StreamingResponse(stream(), media_type="application/zip", headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(name, safe='')}",
+            "Content-Length": str(size), "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        })
+
+    @app.get("/api/servers/{server_id}/files/download")
+    async def download_file(
+        server_id: str,
+        path: str,
+        request: Request,
+    ) -> StreamingResponse:
+        require_login(request)
+        try:
+            response = await agents.download_file(find_server(server_id), path)
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+        download_name = PurePosixPath(path).name or "download"
+        headers = {
+            "Content-Disposition": (
+                f"attachment; filename*=UTF-8''{quote(download_name, safe='')}"
+            ),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        }
+        content_length = response.headers.get("content-length")
+        if content_length and content_length.isdecimal():
+            headers["Content-Length"] = content_length
+        return StreamingResponse(
+            response.aiter_raw(),
+            media_type="application/octet-stream",
+            headers=headers,
+            background=BackgroundTask(response.aclose),
+        )
+
+    @app.put("/api/servers/{server_id}/files/content")
+    async def save_file(
+        server_id: str, payload: FileWriteRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        try:
+            return await agents.save_file(
+                find_server(server_id),
+                payload.path,
+                payload.content,
+                payload.expected_version,
+            )
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+    @app.post("/api/servers/{server_id}/files/directory")
+    async def create_directory(
+        server_id: str, payload: DirectoryCreateRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        try:
+            return await agents.create_directory(find_server(server_id), payload.path)
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+    @app.delete("/api/servers/{server_id}/files")
+    async def delete_file(server_id: str, path: str, request: Request) -> dict:
+        require_login(request)
+        try:
+            result = await agents.delete_file(find_server(server_id), path)
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+        LOG.warning(
+            "Dashboard user=%s deleted server path server=%s path=%s",
+            config.web_username,
+            server_id,
+            result.get("path", path),
+        )
+        return result
+
+    @app.get("/api/servers/{server_id}/console")
+    async def console_output(server_id: str, cursor: int, request: Request) -> dict:
+        require_login(request)
+        try:
+            return await agents.console_output(find_server(server_id), cursor)
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+    @app.post("/api/servers/{server_id}/console")
+    async def console_command(
+        server_id: str, payload: ConsoleCommandRequest, request: Request
+    ) -> dict:
+        require_login(request)
+        try:
+            result = await agents.console_command(
+                find_server(server_id), payload.command
+            )
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+        normalized = payload.command.lstrip().lstrip("/").lstrip()
+        verb = normalized.split(maxsplit=1)[0] if normalized else "invalid"
+        fingerprint = hashlib.sha256(payload.command.encode("utf-8")).hexdigest()[:12]
+        LOG.warning(
+            "Dashboard Minecraft console command user=%s server=%s verb=%s fingerprint=%s",
+            config.web_username,
+            server_id,
+            verb,
+            fingerprint,
+        )
+        return result
+
+    @app.put("/api/servers/{server_id}/files/upload")
+    async def upload_file(
+        server_id: str,
+        request: Request,
+        path: str,
+        overwrite: bool = False,
+    ) -> dict:
+        require_login(request)
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                declared_size = int(content_length)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid Content-Length") from exc
+            if declared_size > MAX_PROXY_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Upload exceeds proxy limit")
+        content = bytearray()
+        async for chunk in request.stream():
+            content.extend(chunk)
+            if len(content) > MAX_PROXY_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Upload exceeds proxy limit")
+        try:
+            return await agents.upload_file(
+                find_server(server_id),
+                path,
+                bytes(content),
+                overwrite=overwrite,
+            )
+        except AgentUnavailable as exc:
+            raise agent_file_error(exc) from exc
+
+    @app.get("/api/servers/{server_id}/jobs/{job_id}")
+    async def job(server_id: str, job_id: str, request: Request) -> dict:
+        require_login(request)
+        try:
+            remote = find_server(server_id)
+            result = await agents.job(remote, job_id)
+            if (
+                result.get("state") == "succeeded"
+                and result.get("operation") == "delete_server"
+            ):
+                async with registry_lock:
+                    if server_id in base_server_map:
+                        registry.suppress_base(server_id)
+                    elif server_id in registry.entries:
+                        registry.remove(server_id)
+                    for agent in paired.agents.values():
+                        same_agent = (
+                            agent.url.rstrip("/") == remote.agent_url.rstrip("/")
+                            and hmac.compare_digest(agent.token, remote.token)
+                        )
+                        if same_agent:
+                            agent.servers = [
+                                item for item in agent.servers if item.id != server_id
+                            ]
+                            paired.put(agent)
+                    sync_runtime_servers()
+            return result
+        except AgentUnavailable as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/")
+    async def index() -> FileResponse:
+        return FileResponse(STATIC_DIR / "index.html")
+
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    return app
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the Minecraft manager controller")
+    parser.add_argument(
+        "--config",
+        default=os.getenv("MC_CONTROLLER_CONFIG", "config/controller.toml"),
+        help="Path to controller TOML configuration",
+    )
+    return parser.parse_args()
 
 
 def main() -> None:
