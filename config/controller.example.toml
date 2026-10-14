@@ -21,6 +21,11 @@ discord_token_env = "DISCORD_BOT_TOKEN"
 guild_id = 123456789012345678
 # Optional: post once here whenever the controller process comes online.
 announcement_channel_id = 123456789012345678
+# Announce the actual lobby event once per event, including after controller downtime.
+seasonal_announcements_enabled = true
+seasonal_server_id = "lobby"
+# Optional separate event channel; 0 uses announcement_channel_id.
+seasonal_channel_id = 0
 # Show the controller health on the bot member as:
 # Watching Minecraft servers • All Good, Caution, or Attention.
 health_presence_enabled = true

@@ -339,6 +339,15 @@ class MinecraftDiscordBot(discord.Client):
             LOG.exception("Could not send Discord announcement to channel %s", channel_id)
             return False
 
+    async def announce_seasonal(self, channel_id: int, message: str) -> bool:
+        try:
+            channel = await self._resolve_message_channel(channel_id)
+            await channel.send(message, allowed_mentions=discord.AllowedMentions.none())
+            return True
+        except (asyncio.TimeoutError, discord.DiscordException, TypeError):
+            LOG.exception("Could not send seasonal event announcement to channel %s", channel_id)
+            return False
+
     async def publish_health(self, snapshot: ControllerHealthSnapshot) -> None:
         self._desired_presence_level = snapshot.level
         await self._update_health_presence(snapshot.level)

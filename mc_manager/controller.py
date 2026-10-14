@@ -32,6 +32,7 @@ from .automation import ServerAutomation, RecoverySettings
 from .folder_transfer import build_folder_archive
 from .file_manager import FileManagerError, ManagedDownload
 from .player_monitor import PlayerPresenceMonitor
+from .seasonal_events import SeasonalEventMonitor
 from .server_registry import (
     ManagedServer,
     ManagedServerRegistry,
@@ -313,13 +314,19 @@ def create_controller_app(
         app.state.player_task = player_task
         app.state.player_monitor = player_monitor
         app.state.discovery_task = discovery_task
+        seasonal_task = (
+            asyncio.create_task(SeasonalEventMonitor(
+                config, agents, bot, config.agent_registry_file.with_name("seasonal-announcements.json")
+            ).run()) if config.seasonal_announcements_enabled else None
+        )
+        app.state.seasonal_task = seasonal_task
         schedule_task = asyncio.create_task(automation.run())
         try:
             yield
         finally:
             background_tasks = tuple(
                 task
-                for task in (health_task, ups_task, player_task, discovery_task, schedule_task)
+                for task in (health_task, ups_task, player_task, discovery_task, schedule_task, seasonal_task)
                 if task is not None
             )
             for task in background_tasks:
