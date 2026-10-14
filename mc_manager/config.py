@@ -175,6 +175,9 @@ class ControllerConfig:
     discovery_enabled: bool = True
     discovery_port: int = 8765
     agent_registry_file: Path = Path("/var/lib/minecraft-manager/paired-agents.json")
+    seasonal_announcements_enabled: bool = True
+    seasonal_server_id: str = "lobby"
+    seasonal_channel_id: int | None = None
 
 
 def load_agent_config(path: str | Path) -> AgentConfig:
@@ -544,6 +547,9 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
         ),
         discord_guild_id=guild_id,
         announcement_channel_id=announcement_channel_id,
+        seasonal_announcements_enabled=bool(discord.get("seasonal_announcements_enabled", True)),
+        seasonal_server_id=_validate_id(str(discord.get("seasonal_server_id", "lobby")), "discord.seasonal_server_id"),
+        seasonal_channel_id=int(discord.get("seasonal_channel_id", 0)) or None,
         allowed_user_ids=frozenset(int(item) for item in discord.get("allowed_user_ids", [])),
         allowed_role_ids=frozenset(int(item) for item in discord.get("allowed_role_ids", [])),
         servers=tuple(servers),
@@ -591,3 +597,4 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
             )
         ),
     )
+
