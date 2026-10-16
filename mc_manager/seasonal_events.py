@@ -40,8 +40,8 @@ def event_message(event: dict) -> str:
     # Plugin-owned titles are displayed as text; Discord mentions are disabled at send.
     title = event["title"].replace("`", "").replace("*", "").replace("\n", " ")
     lines = [f"🎉 **Monkeycraft seasonal event: {title} is on!**",
-             "Visit the **Lobby** for six parkour courses, six arcade games, seasonal quests, "
-             "the token shop, decorations and holiday music.",
+             "Visit the **Lobby** for themed parkour, arcade and arena minigames, seasonal quests, "
+             "exploration shops, cosmetics, decorations and holiday music.",
              "**Right-click the event board at spawn or walk into the parkour arch** to get started."]
     if event.get("mode") == "auto":
         lines.append(f"Runs <t:{event['start']}:D> through <t:{event['end_exclusive'] - 1}:D> "
