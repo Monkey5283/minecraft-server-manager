@@ -78,7 +78,7 @@ const actionLabels = {
 };
 
 async function api(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
+  const headers = { "X-Monkeycraft-Request": "1", ...(options.headers || {}) };
   if (options.body !== undefined && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
@@ -95,6 +95,8 @@ async function api(path, options = {}) {
 }
 
 function showLogin() {
+  document.querySelector("#open-launcher").hidden = true;
+  window.dispatchEvent(new Event("panel-session-change"));
   document.querySelector("#account-settings").hidden = true;
   document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
   stopConsolePolling();
@@ -110,6 +112,7 @@ function showLogin() {
 }
 
 function showDashboard() {
+  window.dispatchEvent(new Event("panel-session-change"));
   document.querySelector("#account-settings").hidden = false;
   stopConsolePolling();
   activeSoftwareServer = null;

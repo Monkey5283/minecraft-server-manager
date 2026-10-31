@@ -8,6 +8,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit
 
 
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -178,6 +179,8 @@ class ControllerConfig:
     seasonal_announcements_enabled: bool = True
     seasonal_server_id: str = "lobby"
     seasonal_channel_id: int | None = None
+    launcher_public_catalog_enabled: bool = False
+    launcher_download_url: str = ""
 
 
 def load_agent_config(path: str | Path) -> AgentConfig:
@@ -453,6 +456,22 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
     player_tracking = data.get("player_tracking", {})
     discovery = data.get("discovery", {})
 
+    launcher = data.get("launcher", {})
+    if not isinstance(launcher, dict) or not isinstance(launcher.get("public_catalog_enabled", False), bool):
+        raise ConfigError("launcher.public_catalog_enabled must be a boolean")
+    launcher_download_url = launcher.get("download_url", "")
+    try:
+        if not isinstance(launcher_download_url, str) or len(launcher_download_url) > 2048:
+            raise ValueError()
+        if launcher_download_url:
+            url = urlsplit(launcher_download_url)
+            if (url.scheme != "https" or not url.hostname or url.username is not None or url.password is not None
+                    or url.fragment or "\\" in launcher_download_url or any(c.isspace() or ord(c) < 32 for c in launcher_download_url)):
+                raise ValueError()
+            url.port
+    except ValueError:
+        raise ConfigError("launcher.download_url must be a public HTTPS URL without credentials") from None
+
     instructions_message = "Server join instructions have not been configured yet."
     if instructions is not None:
         if not isinstance(instructions, dict):
@@ -550,6 +569,8 @@ def load_controller_config(path: str | Path) -> ControllerConfig:
         seasonal_announcements_enabled=bool(discord.get("seasonal_announcements_enabled", True)),
         seasonal_server_id=_validate_id(str(discord.get("seasonal_server_id", "lobby")), "discord.seasonal_server_id"),
         seasonal_channel_id=int(discord.get("seasonal_channel_id", 0)) or None,
+        launcher_public_catalog_enabled=launcher.get("public_catalog_enabled", False),
+        launcher_download_url=launcher_download_url,
         allowed_user_ids=frozenset(int(item) for item in discord.get("allowed_user_ids", [])),
         allowed_role_ids=frozenset(int(item) for item in discord.get("allowed_role_ids", [])),
         servers=tuple(servers),
