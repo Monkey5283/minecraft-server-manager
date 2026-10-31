@@ -10,6 +10,10 @@ requires-python = ">=3.11"
 dependencies = [
     "tzdata>=2024.1",
     "discord.py>=2.4,<3",
+    "aiohttp>=3.14.4,<4",
+    "anyio>=4.14.2,<5",
+    "multidict>=6.9.1,<7",
+    "certifi>=2026.10.18",
     "fastapi>=0.115,<1",
     "httpx>=0.27,<1",
     "itsdangerous>=2.2,<3",
@@ -17,9 +21,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+launcher = [
+    "minecraft-launcher-lib==8.0",
+    "Pillow>=13,<14",
+    "urllib3>=2.8,<3",
+]
 dev = [
-    "pytest>=8,<9",
-    "pytest-asyncio>=0.24,<1",
+    "pytest>=9.0.3,<10",
+    "pytest-asyncio>=1,<2",
 ]
 
 [project.scripts]
@@ -31,6 +40,11 @@ mc-manager-change-software = "mc_manager.server_installer:change_software_main"
 mc-manager-delete-server = "mc_manager.server_installer:delete_server_main"
 mc-manager-managed-action = "mc_manager.server_installer:managed_action_main"
 
+mc-manager-launcher = "mc_manager.launcher.cli:main"
+
+[project.gui-scripts]
+mc-manager-launcher-desktop = "mc_manager.launcher.desktop:main"
+
 [tool.setuptools]
 include-package-data = true
 
@@ -38,8 +52,9 @@ include-package-data = true
 include = ["mc_manager*"]
 
 [tool.setuptools.package-data]
-mc_manager = ["static/*"]
+mc_manager = ["static/*", "launcher/assets/*.png", "launcher/assets/*.ico"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]

@@ -85,7 +85,7 @@ async def test_controller_file_routes_require_dashboard_login_and_proxy_operatio
     app = create_controller_app(controller_config())
     transport = httpx.ASGITransport(app=app)
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as client:
         unauthorized = await client.get("/api/servers/survival/files")
         assert unauthorized.status_code == 401
         unauthorized_download = await client.get(
@@ -195,7 +195,7 @@ async def test_controller_preserves_safe_agent_file_conflict_status(monkeypatch)
     app = create_controller_app(controller_config())
     transport = httpx.ASGITransport(app=app)
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as client:
         await client.post(
             "/api/login", json={"username": "admin", "password": "password"}
         )
@@ -238,7 +238,7 @@ async def test_controller_proxies_per_server_software_catalog_and_change(monkeyp
         "confirm_backup": True,
     }
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as client:
         assert (
             await client.post("/api/servers/survival/software", json=payload)
         ).status_code == 401

@@ -85,7 +85,7 @@ async def test_registry_routes_require_login_and_discover_without_secrets(
     app, agents = make_app(monkeypatch, tmp_path / "managed-servers.json")
     transport = httpx.ASGITransport(app=app)
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as client:
         assert (await client.get("/api/server-registry")).status_code == 401
         assert (await client.get("/api/server-registry/discover")).status_code == 401
         await login(client)
@@ -106,7 +106,7 @@ async def test_dashboard_assets_disable_stale_browser_caching(
     app, _agents = make_app(monkeypatch, tmp_path / "managed-servers.json")
     transport = httpx.ASGITransport(app=app)
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as client:
         index = await client.get("/")
         javascript = await client.get("/static/app.js")
 
@@ -123,7 +123,7 @@ async def test_add_update_and_remove_server_without_restart(
     app, _agents = make_app(monkeypatch, registry_path)
     transport = httpx.ASGITransport(app=app)
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as client:
         await login(client)
         added = await client.post(
             "/api/server-registry",
@@ -205,7 +205,7 @@ async def test_guarded_delete_job_removes_dashboard_registration_after_success(
     )
     transport = httpx.ASGITransport(app=app)
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as client:
         await login(client)
         await client.post(
             "/api/server-registry",
@@ -268,7 +268,7 @@ async def test_guarded_delete_job_suppresses_legacy_controller_server(
     )
     transport = httpx.ASGITransport(app=app)
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as client:
         await login(client)
         dashboard = await client.get("/api/servers")
         deletion = await client.request(
@@ -294,7 +294,7 @@ async def test_registered_server_survives_app_recreation(tmp_path: Path, monkeyp
     registry_path = tmp_path / "managed-servers.json"
     app, _agents = make_app(monkeypatch, registry_path)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Origin": "http://test"}
     ) as client:
         await login(client)
         assert (
@@ -311,7 +311,7 @@ async def test_registered_server_survives_app_recreation(tmp_path: Path, monkeyp
 
     recreated, _agents = make_app(monkeypatch, registry_path)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=recreated), base_url="http://test"
+        transport=httpx.ASGITransport(app=recreated), base_url="http://test", headers={"Origin": "http://test"}
     ) as client:
         await login(client)
         configured = (await client.get("/api/server-registry")).json()["configured"]
@@ -328,7 +328,7 @@ async def test_registration_confirms_agent_capabilities(tmp_path: Path, monkeypa
     )
     transport = httpx.ASGITransport(app=app)
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as client:
         await login(client)
         unavailable = await client.post(
             "/api/server-registry",

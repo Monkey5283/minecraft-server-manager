@@ -35,7 +35,7 @@ async def login(client, username="admin", password="old-password"):
 
 async def test_accounts_roles_passwords_and_persistence(app, tmp_path):
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as admin, httpx.AsyncClient(transport=transport, base_url="http://test") as operator:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as admin, httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as operator:
         assert (await admin.get("/api/users")).status_code == 401
         assert (await admin.post("/api/manager/update")).status_code == 401
         assert (await login(admin)).status_code == 200
@@ -63,7 +63,7 @@ async def test_accounts_roles_passwords_and_persistence(app, tmp_path):
 
 
 async def test_schedule_routes_validation_and_independence(app):
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Origin": "http://test"}) as client:
         url = "/api/servers/survival/restart-schedule"
         assert (await client.get(url)).status_code == 401
         assert (await client.put(url, json={})).status_code == 401
@@ -78,7 +78,7 @@ async def test_schedule_routes_validation_and_independence(app):
 
 
 async def test_timezone_dropdown_and_monitor_settings(app):
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Origin": "http://test"}) as client:
         url = "/api/servers/survival/monitoring"
         assert (await client.get("/api/timezones")).status_code == 401
         assert (await client.get(url)).status_code == 401
@@ -96,7 +96,7 @@ async def test_timezone_dropdown_and_monitor_settings(app):
 
 
 async def test_unknown_warning_destination_rejected(app):
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Origin": "http://test"}) as client:
         await login(client)
         response = await client.put("/api/servers/survival/restart-schedule", json={"enabled": True, "warning_servers": ["missing"]})
         assert response.status_code == 404
@@ -117,7 +117,7 @@ async def test_update_request_and_result(tmp_path, monkeypatch):
     monkeypatch.setattr("mc_manager.controller.AgentClient", lambda: agents)
     monkeypatch.setattr("mc_manager.controller.MinecraftDiscordBot", lambda *a, **k: object())
     app = create_controller_app(config(tmp_path))
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Origin": "http://test"}) as client:
         await login(client)
         assert (await client.post("/api/manager/update")).status_code == 503
         unit.touch()

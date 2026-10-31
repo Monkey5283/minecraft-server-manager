@@ -72,7 +72,7 @@ async def test_archive_route_authentication_zip_and_lock_cleanup(monkeypatch):
     monkeypatch.setattr("mc_manager.controller.AgentClient", lambda: agents)
     monkeypatch.setattr("mc_manager.controller.MinecraftDiscordBot", lambda *a, **k: object())
     app = create_controller_app(controller_config())
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Origin": "http://test"}) as client:
         url = "/api/servers/survival/files/archive?path=world"
         assert (await client.get(url)).status_code == 401
         agents.files.assert_not_awaited()

@@ -41,6 +41,9 @@ from .server_registry import (
 from .ups import UPSMonitor
 
 
+from .launcher.api import install_launcher_routes
+from .web_security import ControllerSecurityMiddleware, LoginThrottle
+
 LOG = logging.getLogger("mc_manager.controller")
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_PROXY_UPLOAD_BYTES = 128 * 1024 * 1024
@@ -343,8 +346,10 @@ def create_controller_app(
         title="Minecraft Manager",
         docs_url=None,
         redoc_url=None,
+        openapi_url=None,
         lifespan=lifespan,
     )
+    app.add_middleware(ControllerSecurityMiddleware, panel=panel, secure_cookies=config.cookie_secure)
     app.add_middleware(
         SessionMiddleware,
         secret_key=config.session_secret,
@@ -363,6 +368,8 @@ def create_controller_app(
     app.state.discovery = discovery
     app.state.paired_agents = paired
     app.state.panel = panel
+    app.state.login_throttle = LoginThrottle()
+    install_launcher_routes(app, config, panel, servers)
     app.state.automation = automation
 
     def require_login(request: Request) -> None:
@@ -424,6 +431,7 @@ def create_controller_app(
 
     @app.post("/api/login")
     async def login(payload: LoginRequest, request: Request) -> dict:
+        app.state.login_throttle.check(request.client.host if request.client else "unknown", payload.username)
         user = panel.data["users"].get(payload.username)
         # Perform a password hash even for unknown usernames.
         encoded = (user or next(iter(panel.data["users"].values())))["hash"]

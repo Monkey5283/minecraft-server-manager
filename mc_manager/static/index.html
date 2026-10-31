@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="/static/style.css" />
     <script src="/static/app.js" defer></script>
     <script src="/static/panel.js" defer></script>
+    <script src="/static/launcher.js" defer></script>
   </head>
   <body>
     <div class="shell">
@@ -20,6 +21,7 @@
           <button id="open-setup" class="secondary" hidden>Add server</button>
           <button id="refresh" class="secondary" hidden>Refresh</button>
           <button id="account-settings" class="secondary" hidden>Account &amp; manager</button>
+          <button id="open-launcher" class="secondary" hidden>Launcher &amp; modpacks</button>
           <button id="logout" class="secondary" hidden>Sign out</button>
         </div>
       </header>
@@ -311,5 +313,69 @@
         </div>
       </article>
     </template>
+    <dialog id="launcher-dialog" class="management-dialog launcher-dialog" aria-labelledby="launcher-title">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">PLAYER CLIENTS</p><h2 id="launcher-title">Launcher &amp; modpacks</h2></div>
+        <button type="button" data-close="launcher-dialog" class="secondary">Close</button>
+      </div>
+      <p class="muted">Create vanilla or modded client profiles, then publish the release players should use.</p>
+      <p id="launcher-feed-status" class="muted"></p>
+      <div class="actions launcher-toolbar">
+        <a id="launcher-download-site" target="_blank" rel="noopener noreferrer" hidden>Open public download site</a>
+        <a href="/api/launcher/catalog" download="launcher-catalog.json">Export published catalog</a>
+        <button id="launcher-reload" type="button" class="secondary">Reload profiles</button>
+      </div>
+      <div id="launcher-notice" class="notice" role="status" hidden></div>
+      <div class="launcher-layout">
+        <aside aria-label="Launcher profiles">
+          <button id="launcher-new-profile" type="button">New profile</button>
+          <div id="launcher-profiles" class="agent-list"></div>
+        </aside>
+        <section>
+          <form id="launcher-profile-form">
+            <h3 id="launcher-profile-heading">New profile</h3>
+            <div class="two-column-fields">
+              <label>Profile ID<input id="launcher-profile-id" pattern="[a-z0-9][a-z0-9_-]{0,63}" maxlength="64" placeholder="monkeycraft-vanilla" required /></label>
+              <label>Display name<input id="launcher-profile-name" maxlength="100" placeholder="Monkeycraft Vanilla" required /></label>
+            </div>
+            <label>Description<textarea id="launcher-profile-description" rows="2" maxlength="2000"></textarea></label>
+            <label>Associated panel server<select id="launcher-profile-server"></select></label>
+            <button type="submit">Save profile</button>
+          </form>
+          <section id="launcher-release-section" hidden>
+            <hr />
+            <h3>Releases</h3>
+            <p id="launcher-current-release" class="muted"></p>
+            <label>Saved release<select id="launcher-release-list"></select></label>
+            <p id="launcher-release-summary" class="muted"></p>
+            <div class="actions">
+              <button id="launcher-publish" type="button">Publish selected release</button>
+              <button id="launcher-template" type="button" class="secondary">Use as template</button>
+              <button id="launcher-withdraw" type="button" class="secondary">Withdraw profile</button>
+            </div>
+            <p class="muted">Publishing selects the version players receive. Select an older release to roll back. Withdrawing hides this profile from the player catalog.</p>
+            <hr />
+            <form id="launcher-release-form">
+              <h3>Create a release</h3>
+              <div class="two-column-fields">
+                <label>Pack release version<input id="launcher-version" maxlength="80" placeholder="1.0.0" required /></label>
+                <label>Minecraft version<input id="launcher-minecraft" maxlength="80" placeholder="1.21.1" required /></label>
+                <label>Mod loader<select id="launcher-loader"><option value="vanilla">Vanilla</option><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option></select></label>
+                <label>Loader version<input id="launcher-loader-version" maxlength="80" disabled /></label>
+                <label>Required Java version<input id="launcher-java" type="number" min="8" max="99" placeholder="21" required /></label>
+                <label>Recommended memory (MiB)<input id="launcher-memory" type="number" min="512" max="65536" value="4096" required /></label>
+              </div>
+              <label>Player server address (optional)<input id="launcher-address" maxlength="260" placeholder="play.example.net:25565" /></label>
+              <label>Release notes<textarea id="launcher-changelog" rows="2" maxlength="8000"></textarea></label>
+              <label>Client files (JSON array)<textarea id="launcher-files" class="launcher-json" rows="7" spellcheck="false" required>[]</textarea></label>
+              <p class="muted">Each file needs a relative <code>path</code>, HTTPS <code>url</code>, <code>sha256</code>, and byte <code>size</code>. Use <code>[]</code> for vanilla. Include only files intended for players.</p>
+              <details><summary>File entry example</summary><pre class="launcher-example">[{"path":"mods/example.jar","url":"https://downloads.example.net/example.jar","sha256":"&lt;64 lowercase hex characters&gt;","size":12345}]</pre></details>
+              <p class="muted">Releases are saved permanently. Use a new version for changes. Saving does not publish or verify remote downloads.</p>
+              <button type="submit">Save release</button>
+            </form>
+          </section>
+        </section>
+      </div>
+    </dialog>
   </body>
 </html>

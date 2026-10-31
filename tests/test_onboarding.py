@@ -45,7 +45,7 @@ async def test_dashboard_discovers_and_pairs_agent(tmp_path: Path, monkeypatch) 
     )
     transport = httpx.ASGITransport(app=app)
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as client:
         assert (await client.get("/api/agents/discovered")).status_code == 401
         await client.post("/api/login", json={"username": "admin", "password": "password"})
         discovered = (await client.get("/api/agents/discovered")).json()
@@ -89,7 +89,7 @@ async def test_dashboard_refreshes_paired_agent_server_inventory(
     )
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Origin": "http://test"}
     ) as client:
         await client.post("/api/login", json={"username": "admin", "password": "password"})
         await client.post(
@@ -148,7 +148,7 @@ async def test_dashboard_adopts_configured_agent_without_exposing_token(
     app = create_controller_app(config)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Origin": "http://test"}
     ) as client:
         await client.post("/api/login", json={"username": "admin", "password": "password"})
         configured = await client.get("/api/agents/configured")
@@ -203,7 +203,7 @@ async def test_configured_agent_must_support_provisioning(
     app = create_controller_app(config)
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"Origin": "http://test"}
     ) as client:
         await client.post("/api/login", json={"username": "admin", "password": "password"})
         response = await client.post(

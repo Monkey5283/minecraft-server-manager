@@ -118,3 +118,8 @@ name = "Vanilla"
 agent_url = "http://192.168.1.16:8766"
 token_env = "MC_AGENT_TOKEN_HOST1"
 track_players = true
+
+[launcher]
+# Keep the controller private; upload exported catalogs to the public site.
+public_catalog_enabled = false
+download_url = "https://launcher.monkeyservers.com"
