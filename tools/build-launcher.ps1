@@ -1,6 +1,6 @@
 param(
     [string]$Python = '.test-tmp\launcher-build-env\Scripts\python.exe',
-    [string]$CatalogUrl = 'https://monkeycraft-launcher.giddymixer.chatgpt.site/catalog.json',
+    [string]$CatalogUrl = 'https://launcher.monkeyservers.com/catalog.json',
     [string]$ClientId = '0faa7c4a-ff72-4202-8cc9-9e246c4dae89'
 )
 $ErrorActionPreference = 'Stop'

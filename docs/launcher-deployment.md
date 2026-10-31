@@ -4,9 +4,8 @@ Reviewed 2026-10-31. This is a preview release, not a security certification.
 
 ## Separate public downloads from private administration
 
-The public download site is https://monkeycraft-launcher.giddymixer.chatgpt.site/.
-The requested custom hostname is `launcher.monkeyservers.com`, pending DNS and TLS
-validation. The site is static: artwork, download parts, checksums and a player
+The public download site is https://launcher.monkeyservers.com/.
+The custom domain and HTTPS certificate are active. The site is static: artwork, download parts, checksums and a player
 catalog. It has no controller backend, private-network tunnel or panel credentials.
 Keep the manager on its existing Tailscale address with its application login.
 Do not point public DNS, Tailscale Funnel or a public reverse proxy at the manager.
@@ -73,3 +72,7 @@ end to end for public users. No authentication bypass is provided.
 Keep signing, application approval, actual account/game play tests and ongoing
 dependency updates on the release checklist. Do not present this preview as fully
 verified production software.
+
+## Branded website address
+
+Preview 0.1.0-preview.2 uses `https://launcher.monkeyservers.com/catalog.json` by default. Opening this updated executable also migrates the original bundled catalog URL in existing settings; custom catalog URLs, local exports, instance libraries and account preferences remain unchanged. Earlier executable downloads must be replaced manually because this preview has no self-updater. The manager links directly to the branded public website.
