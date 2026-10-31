@@ -70,7 +70,12 @@ def load_settings(directory: Path) -> DesktopSettings:
         if getattr(sys, "frozen", False):
             defaults = json.loads(Path(__file__).with_name("defaults.json").read_text(encoding="utf-8"))
         return DesktopSettings(library_directory=str(root / "library"), **defaults)
-    return DesktopSettings.model_validate(read_json(path))
+    settings = DesktopSettings.model_validate(read_json(path))
+    # Move the original bundled catalog to our public domain. Leave custom
+    # catalogs, local exports, account settings and instance paths untouched.
+    if settings.catalog_source == "https://monkeycraft-launcher.giddymixer.chatgpt.site/catalog.json":
+        settings.catalog_source = "https://launcher.monkeyservers.com/catalog.json"
+    return settings
 
 
 def save_settings(directory: Path, settings: DesktopSettings) -> None:

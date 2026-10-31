@@ -30,7 +30,7 @@ def install_launcher_routes(app: FastAPI, config, panel, servers) -> None:
         return {"profiles": store.profiles(),
                 "servers": [{"id": server.id, "name": server.name} for server in servers.values()],
                 "public_catalog_enabled": config.launcher_public_catalog_enabled,
-                "download_url": config.launcher_download_url or "https://monkeycraft-launcher.giddymixer.chatgpt.site/",
+                "download_url": config.launcher_download_url or "https://launcher.monkeyservers.com/",
                 "catalog_path": "/launcher/v1/catalog"}
 
     @admin.post("/profiles", status_code=201)
