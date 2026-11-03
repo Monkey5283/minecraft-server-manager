@@ -172,7 +172,7 @@ def _server_record(
             "enabled": True,
             "root": f"/srv/minecraft/{server_id}",
             "max_edit_size_bytes": 2097152,
-            "max_upload_size_bytes": 134217728,
+            "max_upload_size_bytes": 104857600,
         },
         "console": {
             "enabled": True,
