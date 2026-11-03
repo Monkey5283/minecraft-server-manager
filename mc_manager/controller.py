@@ -49,6 +49,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 MAX_PROXY_UPLOAD_BYTES = 128 * 1024 * 1024
 UPDATE_DIRECTORY = Path("/var/lib/minecraft-manager")
 UPDATE_PATH_UNIT = Path("/etc/systemd/system/mc-manager-update.path")
+FLEET_TARGETS_FILE = Path("/etc/minecraft-manager/fleet")
 DEFAULT_MANAGED_SERVERS_FILE = Path(
     "/var/lib/minecraft-manager/managed-servers.json"
 )
@@ -556,16 +557,20 @@ def create_controller_app(
             result = {"state": "idle"}
         if (update_directory / "manager-update.request").exists():
             result = {"state": "running"}
-        return {**result, "enabled": enabled}
+        return {**result, "enabled": enabled, "fleet_enabled": FLEET_TARGETS_FILE.is_file()}
 
     @app.post("/api/manager/update", status_code=202)
-    async def update_manager(request: Request) -> dict:
+    async def update_manager(request: Request, scope: str = "controller") -> dict:
         panel.require(request, admin=True)
         if not UPDATE_PATH_UNIT.exists():
             raise HTTPException(503, "Install the manager update service on the controller first")
+        if scope not in {"controller", "fleet"}:
+            raise HTTPException(400, "Unknown update scope")
+        if scope == "fleet" and not FLEET_TARGETS_FILE.is_file():
+            raise HTTPException(503, "Configure controller fleet targets first")
         try:
             with (update_directory / "manager-update.request").open("x") as handle:
-                handle.write("update\n")
+                handle.write("fleet\n" if scope == "fleet" else "update\n")
         except FileExistsError:
             raise HTTPException(409, "A manager update is already queued or running")
         return {"state": "queued"}
