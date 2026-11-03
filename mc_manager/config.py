@@ -81,7 +81,7 @@ class PlayerQueryConfig:
 class FileManagerConfig:
     root: Path
     max_edit_size_bytes: int = 2 * 1024 * 1024
-    max_upload_size_bytes: int = 32 * 1024 * 1024
+    max_upload_size_bytes: int = 100 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -314,7 +314,7 @@ def load_agent_config(path: str | Path) -> AgentConfig:
                     raw_file_manager.get("max_edit_size_bytes", 2 * 1024 * 1024)
                 )
                 max_upload_size = int(
-                    raw_file_manager.get("max_upload_size_bytes", 32 * 1024 * 1024)
+                    raw_file_manager.get("max_upload_size_bytes", 100 * 1024 * 1024)
                 )
                 if not 1024 <= max_edit_size <= 10 * 1024 * 1024:
                     raise ConfigError(
