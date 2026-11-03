@@ -548,7 +548,7 @@ that should expose files:
 enabled = true
 root = "/srv/minecraft/survival"
 max_edit_size_bytes = 2097152
-max_upload_size_bytes = 33554432
+max_upload_size_bytes = 104857600
 ```
 
 Standard legacy servers under `/srv/minecraft/SERVER_ID` receive these console

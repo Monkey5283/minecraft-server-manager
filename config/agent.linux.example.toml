@@ -24,7 +24,7 @@ timeout_seconds = 3
 enabled = true
 root = "/srv/minecraft/survival"
 max_edit_size_bytes = 2097152
-max_upload_size_bytes = 33554432
+max_upload_size_bytes = 104857600
 
 # Optional live Minecraft command console. This is not an operating-system shell.
 # Use deploy/scripts/start-minecraft-server so the named input pipe is created.
