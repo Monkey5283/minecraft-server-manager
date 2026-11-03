@@ -39,6 +39,8 @@ if ! flock --nonblock 9; then
 fi
 
 service_name="mc-manager-${ROLE}.service"
+# Keep a rollback copy if the agent's old explicit upload limit is migrated.
+upload_config_backup=""
 git_as_manager=(sudo -u mcmanager git -C "$SOURCE_DIR")
 python_as_manager=(sudo -u mcmanager "$VENV_DIR/bin/python")
 previous_commit="$("${git_as_manager[@]}" rev-parse HEAD)"
@@ -52,6 +54,10 @@ if [[ "$previous_commit" == "$target_commit" && "${1:-}" != "--force" ]]; then
 fi
 
 rollback() {
+  if [[ -n "$upload_config_backup" && -f "$upload_config_backup" ]]; then
+    cp -p "$upload_config_backup" /etc/minecraft-manager/agent.toml
+    rm -f "$upload_config_backup"
+  fi
   echo "update failed; rolling back to ${previous_commit:0:12}" >&2
   "${git_as_manager[@]}" reset --hard "$previous_commit"
   "${python_as_manager[@]}" -m pip install --quiet --upgrade "$SOURCE_DIR"
@@ -147,6 +153,34 @@ for entry in payload.get("servers", []):
 PY
 fi
 
+# Upgrade only the old, explicitly configured 32 MiB upload limit.
+# Leave all other settings unchanged, including custom upload limits.
+if [[ "$ROLE" == "agent" ]]; then
+  agent_config=/etc/minecraft-manager/agent.toml
+  upload_config_backup="$(mktemp /etc/minecraft-manager/.agent-upload-backup.XXXXXX)"
+  cp -p "$agent_config" "$upload_config_backup"
+  python3 - "$agent_config" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+data = path.read_bytes()
+section = False
+lines = []
+for line in data.splitlines(keepends=True):
+    stripped = line.strip()
+    if stripped.startswith(b"[") and stripped.endswith(b"]"):
+        section = stripped == b"[servers.file_manager]"
+    if section and re.fullmatch(rb"\s*max_upload_size_bytes\s*=\s*33554432\s*(?:\#.*)?", line.rstrip(b"\r\n")):
+        line = line.replace(b"33554432", b"104857600", 1)
+    lines.append(line)
+new_data = b"".join(lines)
+if new_data != data:
+    path.write_bytes(new_data)
+PY
+fi
+
 systemctl daemon-reload
 if [[ "$ROLE" == "controller" ]]; then
   systemctl enable --now mc-manager-update.path
@@ -159,6 +193,9 @@ for _ in {1..30}; do
     healthy_checks=$((healthy_checks + 1))
     if (( healthy_checks >= 3 )); then
       trap - ERR
+      if [[ -n "$upload_config_backup" ]]; then
+        rm -f "$upload_config_backup"
+      fi
       echo "Updated Minecraft Manager to ${target_commit:0:12}; configuration preserved."
       exit 0
     fi
