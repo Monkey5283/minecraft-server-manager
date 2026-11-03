@@ -285,7 +285,9 @@
         <h3>Update manager</h3>
         <p class="muted">Updates this controller from its configured repository and branch. The panel briefly disconnects while restarting. Minecraft servers and remote agents are not restarted.</p>
         <p id="manager-update-status" role="status" class="muted"></p>
-        <button id="manager-update" type="button" class="warning">Update manager</button>
+        <button id="manager-update" type="button" class="warning">Update controller</button>
+        <button id="manager-update-fleet" type="button" class="secondary" disabled>Update controller + agents</button>
+        <p class="muted">Fleet updates use the controller's configured SSH targets in /etc/minecraft-manager/fleet. Agent services briefly restart, not Minecraft servers.</p>
       </section>
     </dialog>
 

@@ -184,7 +184,9 @@ async function refreshManagerUpdate() {
     panelNode("manager-update-status").textContent = update.enabled
       ? `Update status: ${update.state}${update.message ? ` — ${update.message}` : ""}`
       : "The update service needs to be installed on this controller. Run the existing command-line manager updater once to install it.";
-    panelNode("manager-update").disabled = !update.enabled || ["queued", "running"].includes(update.state);
+    const busy = ["queued", "running"].includes(update.state);
+    panelNode("manager-update").disabled = !update.enabled || busy;
+    panelNode("manager-update-fleet").disabled = !update.enabled || !update.fleet_enabled || busy;
   } catch (error) {
     panelNode("manager-update-status").textContent = `Waiting for controller: ${error.message}`;
   }
@@ -238,14 +240,18 @@ panelNode("add-user-form").addEventListener("submit", async (event) => {
   } catch (error) { showDialogNotice(panelNode("account-notice"), error.message, "error"); }
   finally { event.submitter.disabled = false; }
 });
-panelNode("manager-update").addEventListener("click", async () => {
-  if (!window.confirm("Update the manager from its configured branch? The control panel will briefly disconnect.")) return;
+async function requestManagerUpdate(scope) {
+  if (!window.confirm(scope === "fleet"
+    ? "Update configured agents via SSH, then the controller? Agent services will restart."
+    : "Update this controller? The panel will briefly disconnect.")) return;
   panelNode("manager-update").disabled = true;
   try {
-    await api("/api/manager/update", {method: "POST"});
+    await api(`/api/manager/update?scope=${scope}`, {method: "POST"});
     panelNode("manager-update-status").textContent = "Update queued. Waiting for controller…";
   } catch (error) {
     showDialogNotice(panelNode("account-notice"), error.message, "error");
     await refreshManagerUpdate();
   }
-});
+}
+panelNode("manager-update").addEventListener("click", () => requestManagerUpdate("controller"));
+panelNode("manager-update-fleet").addEventListener("click", () => requestManagerUpdate("fleet"));

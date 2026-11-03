@@ -299,3 +299,28 @@ def test_monkey_portals_supports_typed_local_destinations_and_legacy_files():
     assert 'case "portal"' in repository
     assert 'path + ".server"' in repository
     assert "sealed interface PortalTarget" in target
+
+
+def test_dashboard_fleet_update_uses_existing_root_owned_updater():
+    controller = (ROOT / "mc_manager/controller.py").read_text()
+    runner = (ROOT / "deploy/scripts/run-minecraft-manager-web-update").read_text()
+    fleet = (ROOT / "deploy/scripts/update-minecraft-manager-fleet").read_text()
+    assert 'scope not in {"controller", "fleet"}' in controller
+    assert 'handle.write("fleet\\n" if scope == "fleet" else "update\\n")' in controller
+    assert 'exec /usr/local/bin/update-minecraft-manager-fleet' in runner
+    assert 'case "$scope" in' in runner
+    assert 'ssh -n -o BatchMode=yes' in fleet
+
+
+def test_agent_updater_preserves_custom_limits_and_rolls_back_migration():
+    updater = (ROOT / "deploy/scripts/update-minecraft-manager").read_text()
+    assert 'stripped == b"[servers.file_manager]"' in updater
+    assert 'line.replace(b"33554432", b"104857600", 1)' in updater
+    assert 'cp -p "$upload_config_backup" /etc/minecraft-manager/agent.toml' in updater
+    assert 'rm -f "$upload_config_backup"' in updater
+
+
+def test_managed_server_template_uses_100_mib_limit():
+    installer = (ROOT / "mc_manager/server_installer.py").read_text()
+    assert '"max_upload_size_bytes": 104857600' in installer
+

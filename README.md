@@ -593,9 +593,17 @@ Run this command on the controller and every agent:
 sudo update-minecraft-manager
 ```
 
-The updater preserves files under `/etc/minecraft-manager`, installs the latest
+The updater preserves files under `/etc/minecraft-manager` except that an explicit legacy 32 MiB per-file upload limit in an agent's `[servers.file_manager]` section is migrated to 100 MiB. It installs the latest
 configured branch, restarts the correct service, and restores the previous
 revision if the new service does not stay active.
+
+The **Update controller** dashboard button only updates the controller. The new
+**Update controller + agents** option runs the existing fleet updater, which
+requires SSH targets in `/etc/minecraft-manager/fleet`, passwordless SSH from
+the controller, and passwordless sudo for the updater on each agent. It updates
+agents first, then the controller. Merging a GitHub PR alone does not deploy
+code to machines. Existing installations must first update their controller
+once to install the new dashboard option.
 
 ## Troubleshooting
 
