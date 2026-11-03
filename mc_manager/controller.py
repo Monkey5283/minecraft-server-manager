@@ -50,6 +50,19 @@ MAX_PROXY_UPLOAD_BYTES = 128 * 1024 * 1024
 UPDATE_DIRECTORY = Path("/var/lib/minecraft-manager")
 UPDATE_PATH_UNIT = Path("/etc/systemd/system/mc-manager-update.path")
 FLEET_TARGETS_FILE = Path("/etc/minecraft-manager/fleet")
+
+
+def fleet_targets_configured(path: Path) -> bool:
+    """Enable fleet updates only for non-example host targets."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    targets = [line.split("#", 1)[0].strip() for line in lines]
+    return any(target and target not in {
+        "mcdeploy@192.168.1.31", "mcdeploy@192.168.1.32"
+    } for target in targets)
+
 DEFAULT_MANAGED_SERVERS_FILE = Path(
     "/var/lib/minecraft-manager/managed-servers.json"
 )
@@ -557,7 +570,7 @@ def create_controller_app(
             result = {"state": "idle"}
         if (update_directory / "manager-update.request").exists():
             result = {"state": "running"}
-        return {**result, "enabled": enabled, "fleet_enabled": FLEET_TARGETS_FILE.is_file()}
+        return {**result, "enabled": enabled, "fleet_enabled": fleet_targets_configured(FLEET_TARGETS_FILE)}
 
     @app.post("/api/manager/update", status_code=202)
     async def update_manager(request: Request, scope: str = "controller") -> dict:
@@ -566,7 +579,7 @@ def create_controller_app(
             raise HTTPException(503, "Install the manager update service on the controller first")
         if scope not in {"controller", "fleet"}:
             raise HTTPException(400, "Unknown update scope")
-        if scope == "fleet" and not FLEET_TARGETS_FILE.is_file():
+        if scope == "fleet" and not fleet_targets_configured(FLEET_TARGETS_FILE):
             raise HTTPException(503, "Configure controller fleet targets first")
         try:
             with (update_directory / "manager-update.request").open("x") as handle:

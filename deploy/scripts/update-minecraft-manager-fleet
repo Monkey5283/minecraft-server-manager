@@ -8,15 +8,21 @@ fleet_file="${MC_MANAGER_FLEET_FILE:-/etc/minecraft-manager/fleet}"
 }
 
 failures=0
+targets=0
 while IFS= read -r target || [[ -n "$target" ]]; do
   target="${target%%#*}"
   target="${target//[[:space:]]/}"
   [[ -n "$target" ]] || continue
+  if [[ "$target" == "mcdeploy@192.168.1.31" || "$target" == "mcdeploy@192.168.1.32" ]]; then
+    echo "Skipping example fleet address: $target" >&2
+    continue
+  fi
   if [[ ! "$target" =~ ^[A-Za-z0-9][A-Za-z0-9_.:@-]*$ ]]; then
     echo "skipping invalid SSH target: $target" >&2
     failures=$((failures + 1))
     continue
   fi
+  targets=$((targets + 1))
   echo "Updating agent on ${target}..."
   if ! ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$target" \
     sudo --non-interactive /usr/local/sbin/update-minecraft-manager; then
@@ -24,6 +30,11 @@ while IFS= read -r target || [[ -n "$target" ]]; do
     failures=$((failures + 1))
   fi
 done <"$fleet_file"
+
+if (( targets == 0 )); then
+  echo "No real agent SSH targets are configured in $fleet_file; refusing fleet update." >&2
+  exit 2
+fi
 
 echo "Updating the controller on this Raspberry Pi..."
 if ! sudo /usr/local/sbin/update-minecraft-manager; then

@@ -20,10 +20,19 @@ def test_updater_never_targets_configuration_directory():
     assert "reset --hard /etc" not in updater
 
 
+def test_bootstrap_does_not_install_example_fleet_targets():
+    bootstrap = (ROOT / "deploy/scripts/bootstrap-minecraft-manager").read_text()
+    assert 'config/fleet.example" "${config_dir}/fleet"' not in bootstrap
+    controller = (ROOT / "mc_manager/controller.py").read_text()
+    assert "fleet_targets_configured(FLEET_TARGETS_FILE)" in controller
+
+
 def test_fleet_updater_does_not_consume_the_fleet_file_through_ssh():
     updater = (ROOT / "deploy/scripts/update-minecraft-manager-fleet").read_text()
 
     assert "ssh -n -o BatchMode=yes" in updater
+    assert "Skipping example fleet address" in updater
+    assert "No real agent SSH targets are configured" in updater
 
 
 def test_controller_unit_has_persistent_player_session_state():

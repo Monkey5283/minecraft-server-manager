@@ -94,8 +94,10 @@ if [[ "$role" == "controller" ]]; then
   install -m 0755 "${source_dir}/deploy/scripts/setup-minecraft-manager-tailscale" \
     /usr/local/sbin/setup-minecraft-manager-tailscale
   if [[ ! -e "${config_dir}/fleet" ]]; then
-    install -o root -g mcmanager -m 0640 \
-      "${source_dir}/config/fleet.example" "${config_dir}/fleet"
+    # Do not turn example addresses into actual update targets.
+    printf '# Add one SSH destination per real agent host.\n' >"${config_dir}/fleet"
+    chown root:mcmanager "${config_dir}/fleet"
+    chmod 0640 "${config_dir}/fleet"
   fi
   service_name="mc-manager-controller.service"
 else
