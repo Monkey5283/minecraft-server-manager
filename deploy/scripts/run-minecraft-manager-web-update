@@ -16,4 +16,15 @@ if [[ "${1:-}" == "--finish" ]]; then
   rm -f "$state_dir/manager-update.request"
   exit 0
 fi
-/usr/local/sbin/update-minecraft-manager
+# Requests are fixed commands selected by the authenticated dashboard.
+request="$state_dir/manager-update.request"
+[[ -f "$request" && ! -L "$request" ]] || { echo "Missing update request" >&2; exit 1; }
+scope="$(cat "$request")"
+case "$scope" in
+  update) exec /usr/local/sbin/update-minecraft-manager ;;
+  fleet)
+    [[ -s /etc/minecraft-manager/fleet ]] || { echo "No fleet configured" >&2; exit 1; }
+    exec /usr/local/bin/update-minecraft-manager-fleet
+    ;;
+  *) echo "Unknown update request" >&2; exit 2 ;;
+esac
