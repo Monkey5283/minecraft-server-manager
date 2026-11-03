@@ -152,6 +152,35 @@ status = ["service", "status"]
     assert loaded.servers[0].console.input_pipe == (server_root / ".manager/console.in").resolve()
 
 
+
+def test_agent_file_manager_defaults_to_100_mib_uploads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("TEST_AGENT_TOKEN", "secret")
+    config = tmp_path / "agent.toml"
+    config.write_text(
+        """
+[agent]
+token_env = "TEST_AGENT_TOKEN"
+[[servers]]
+id = "survival"
+working_directory = "."
+[servers.file_manager]
+enabled = true
+[servers.actions]
+start = ["service", "start"]
+stop = ["service", "stop"]
+restart = ["service", "restart"]
+status = ["service", "status"]
+""",
+        encoding="utf-8",
+    )
+
+    files = load_agent_config(config).servers[0].file_manager
+    assert files is not None
+    assert files.max_upload_size_bytes == 100 * 1024 * 1024
+
+
 def test_agent_rejects_console_paths_outside_server_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
