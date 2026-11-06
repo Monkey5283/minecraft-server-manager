@@ -66,6 +66,7 @@ async def test_admin_permissions_and_public_opt_in(make_app):
                     ("POST", "/api/launcher/profiles", {"id": "x", "name": "X"}),
                     ("PUT", "/api/launcher/profiles/x", {"name": "X", "expected_revision": 1}),
                     ("GET", "/api/launcher/profiles/x/releases", None),
+                    ("GET", "/api/launcher/profiles/x/releases/1/changes", None),
                     ("POST", "/api/launcher/profiles/x/releases", release()),
                     ("PUT", "/api/launcher/profiles/x/publication", {"version": "1.0.0", "expected_revision": 1})]
         for method, url, payload in requests:
@@ -310,3 +311,70 @@ def test_launcher_config_is_explicit_boolean(tmp_path, monkeypatch, value, expec
             load_controller_config(path)
     else:
         assert load_controller_config(path).launcher_public_catalog_enabled is expected
+
+
+def test_curated_release_diff_and_storage_budget(tmp_path):
+    store = LauncherStore(tmp_path / "curation.sqlite3")
+    store.create_profile(NewProfile(id="pack", name="Pack"))
+    first = pack_file("config/a.json", b"old")
+    store.create_release("pack", ReleaseSpec(**release(files=[first])), "owner")
+    store.publish("pack", "1.0.0", 1)
+    changed = pack_file("config/a.json", b"new contents")
+    added = pack_file("config/b.json", b"b")
+    store.create_release("pack", ReleaseSpec(**release("2.0.0", files=[changed, added])), "owner")
+    diff = store.release_changes("pack", "2.0.0")
+    assert diff["changed"] == ["config/a.json"]
+    assert diff["added"] == ["config/b.json"]
+    assert diff["download_bytes"] == changed["size"] + added["size"]
+    assert not diff["runtime_changed"]
+    large = [{**pack_file(f"resourcepacks/{i}.zip"), "size": 2_000_000_000, "sha256": str(i) * 64} for i in range(4)]
+    with pytest.raises(LauncherStoreError, match="8 GB"):
+        store.create_release("pack", ReleaseSpec(**release("3.0.0", files=large)), "owner")
+    assert len(store.releases("pack")) == 2
+
+async def test_release_review_is_admin_only(make_app):
+    app = make_app()
+    async with client_for(app) as client:
+        route = "/api/launcher/profiles/pack/releases/1.0.0/changes"
+        assert (await client.get(route)).status_code == 401
+        await login(client)
+        await client.post("/api/launcher/profiles", json={"id":"pack", "name":"Pack"})
+        await client.post("/api/launcher/profiles/pack/releases", json=release())
+        assert (await client.get(route)).json()["from_version"] is None
+        status = (await client.get("/api/launcher")).json()["publishing"]
+        assert status == {"mode": "manual_export", "automatic_uploads_enabled": False,
+                          "retained_file_bytes": 0, "file_budget_bytes": 8_000_000_000}
+
+
+def test_budget_counts_retained_versions_and_separate_hosted_copies(tmp_path):
+    store = LauncherStore(tmp_path / "budget.sqlite3")
+    store.create_profile(NewProfile(id="pack", name="Pack"))
+    original = pack_file("config/a.json", b"same bytes")
+    store.create_release("pack", ReleaseSpec(**release(files=[original])), "owner")
+    # The same URL and checksum can be reused without reserving a second copy.
+    store.create_release("pack", ReleaseSpec(**release("2", files=[original])), "owner")
+    assert store.publishing_status()["retained_file_bytes"] == original["size"]
+    copy = {**original, "url": "https://cdn.example.net/second-copy.json"}
+    store.create_release("pack", ReleaseSpec(**release("3", files=[copy])), "owner")
+    assert store.publishing_status()["retained_file_bytes"] == 2 * original["size"]
+    store.publish("pack", "1.0.0", 1)
+    store.publish("pack", None, 2)
+    assert store.publishing_status()["retained_file_bytes"] == 2 * original["size"]
+
+
+def test_release_review_tracks_removals_runtime_and_rollback(tmp_path):
+    store = LauncherStore(tmp_path / "changes.sqlite3")
+    store.create_profile(NewProfile(id="pack", name="Pack"))
+    store.create_release("pack", ReleaseSpec(**release(files=[pack_file("config/old.json")])), "owner")
+    store.create_release("pack", ReleaseSpec(**release("2", minecraft_version="1.21.4")), "owner")
+    store.publish("pack", "1.0.0", 1)
+    diff = store.release_changes("pack", "2")
+    assert diff["removed"] == ["config/old.json"]
+    assert diff["runtime_changed"] and diff["revision"] == 2
+    assert diff["download_bytes"] == 0
+    store.publish("pack", "2", 2)
+    rollback = store.release_changes("pack", "1.0.0")
+    assert rollback["added"] == ["config/old.json"]
+    assert rollback["from_version"] == "2" and rollback["revision"] == 3
+    with pytest.raises(LauncherStoreError, match="Unknown release"):
+        store.release_changes("pack", "missing")

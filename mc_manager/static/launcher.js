@@ -45,7 +45,7 @@
       const title = document.createElement("span");
       title.textContent = profile.name;
       const status = document.createElement("small");
-      status.textContent = profile.active_version ? `Published: ${profile.active_version}` : "Not published";
+      status.textContent = profile.active_version ? `Current: ${profile.active_version}` : "Draft";
       button.append(title, status);
       button.addEventListener("click", () => run(() => selectProfile(profile.id)));
       node("profiles").append(button);
@@ -63,6 +63,7 @@
     const release = releases.find((item) => item.manifest.version === node("release-list").value);
     node("publish").disabled = !release || release.manifest.version === selected?.active_version;
     node("template").disabled = !release;
+    node("review").disabled = !release;
     node("withdraw").disabled = !selected?.active_version;
     node("release-summary").textContent = release
       ? `Minecraft ${release.manifest.minecraft_version} · ${release.manifest.loader.kind} · ${release.manifest.files.length} files · ${release.published_at ? "Previously published" : "Saved, not yet published"}`
@@ -74,9 +75,13 @@
     selected = profiles.find((profile) => profile.id === id) || null;
     releases = [];
     node("profile-form").reset();
+    node("profile-settings").open = !selected;
+    node("release-editor").open = false;
     node("release-form").reset();
+    node("change-summary").hidden = true;
+    node("file-count").textContent = "";
     updateLoader();
-    node("profile-heading").textContent = selected ? selected.name : "New profile";
+    node("profile-heading").textContent = selected ? selected.name : "New pack";
     node("profile-id").value = selected?.id || "";
     node("profile-id").readOnly = Boolean(selected);
     node("profile-name").value = selected?.name || "";
@@ -93,7 +98,7 @@
     renderReleaseSelection();
     if (!selected) return;
     node("current-release").textContent = selected.active_version
-      ? `Players receive release ${selected.active_version}.` : "This profile is not in the player catalog.";
+      ? `Controller catalog selects release ${selected.active_version}.` : "This profile is not in the controller catalog.";
     const result = await api(`/api/launcher/profiles/${encodeURIComponent(id)}/releases`);
     if (generation !== selectionGeneration) return;
     releases = result;
@@ -109,6 +114,10 @@
     const result = await api("/api/launcher");
     profiles = result.profiles;
     servers = result.servers;
+    const budget = result.publishing;
+    node("publishing-budget").textContent = budget
+      ? `${(budget.retained_file_bytes / 1e9).toFixed(2)} / ${(budget.file_budget_bytes / 1e9).toFixed(0)} GB of retained pack files. Automatic hosting uploads are disabled. This is a catalog budget, not a Cloudflare usage meter.`
+      : "Manual catalog export. Automatic hosting uploads are disabled.";
     const downloadSite = node("download-site");
     const publicUrl = result.download_url ? new URL(result.download_url) : null;
     downloadSite.hidden = !publicUrl || publicUrl.protocol !== "https:";
@@ -143,7 +152,47 @@
   node("reload").addEventListener("click", () => run(() => load()));
   node("new-profile").addEventListener("click", () => run(() => selectProfile(null)));
   node("loader").addEventListener("change", updateLoader);
-  node("release-list").addEventListener("change", renderReleaseSelection);
+  node("release-list").addEventListener("change", () => {
+    node("change-summary").hidden = true;
+    renderReleaseSelection();
+  });
+
+  node("review").addEventListener("click", () => run(async () => {
+    if (!selected || !node("release-list").value) return;
+    const change = await api(`/api/launcher/profiles/${encodeURIComponent(selected.id)}/releases/${encodeURIComponent(node("release-list").value)}/changes`);
+    node("change-summary").textContent = [
+      `${change.from_version || "First install"} → ${change.to_version}`,
+      `${change.added.length} added · ${change.changed.length} changed · ${change.removed.length} removed`,
+      `${(change.download_bytes / 1048576).toFixed(1)} MiB changed pack files (game/runtime downloads additional)`,
+      change.runtime_changed ? "Minecraft / loader / Java settings change." : "Game runtime unchanged.",
+      ...change.added.map(p => `+ ${p}`), ...change.changed.map(p => `~ ${p}`), ...change.removed.map(p => `− ${p}`),
+    ].join("\n");
+    node("change-summary").hidden = false;
+  }));
+  node("folder-import").addEventListener("change", () => {
+    const picked = [...node("folder-import").files];
+    return run(async () => {
+      const base = new URL(node("file-base").value);
+      if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) throw Error("Use an HTTPS base URL without credentials, query or fragment.");
+      if (!base.pathname.endsWith("/")) base.pathname += "/";
+      const managed = new Set(["mods", "config", "defaultconfigs", "resourcepacks", "shaderpacks", "kubejs"]);
+      const entries = []; let ignored = 0, total = 0;
+      for (const file of picked) {
+        const path = file.webkitRelativePath.split("/").slice(1).join("/");
+        if (!managed.has(path.split("/")[0])) { ignored++; continue; }
+        if (file.size > 256 * 1048576 || entries.length >= 4096) throw Error("Import supports up to 4096 files, each at most 256 MiB.");
+        total += file.size;
+        if (total > 8_000_000_000) throw Error("Pack exceeds the 8 GB curation limit. Reduce its contents before publishing.");
+        node("file-count").textContent = `Checking ${path}…`;
+        const hash = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+        entries.push({path, url: new URL(path.split("/").map(encodeURIComponent).join("/"), base).href,
+          sha256: [...new Uint8Array(hash)].map(v => v.toString(16).padStart(2, "0")).join(""), size: file.size});
+      }
+      if (!entries.length) throw Error("No managed client files found. Select the instance folder containing mods or config.");
+      node("files").value = JSON.stringify(entries, null, 2);
+      node("file-count").textContent = `${entries.length} files · ${(total / 1048576).toFixed(1)} MiB · ${ignored} other files excluded. Review the JSON list to remove unwanted files.`;
+    });
+  });
 
   node("profile-form").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -186,7 +235,8 @@
       method: "PUT", body: JSON.stringify({version, expected_revision: selected.revision}),
     });
     await load(selected.id);
-    message(version ? `Release ${version} is now published.` : "Profile withdrawn from the player catalog.");
+    message(version ? `Release ${version} selected in the controller catalog. Export and deploy catalog.json to update the separate public website.`
+      : "Profile withdrawn from the controller catalog. Export and deploy catalog.json to remove it from the public website.");
   }
   node("publish").addEventListener("click", () => run(() => publish(node("release-list").value)));
   node("withdraw").addEventListener("click", () => run(() => publish(null)));
@@ -203,6 +253,7 @@
     node("address").value = source.server_address || "";
     node("changelog").value = "";
     node("files").value = JSON.stringify(source.files, null, 2);
+    node("release-editor").open = true;
     node("version").focus();
   });
 })();
