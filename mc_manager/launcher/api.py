@@ -28,6 +28,7 @@ def install_launcher_routes(app: FastAPI, config, panel, servers) -> None:
     @admin.get("")
     def overview():
         return {"profiles": store.profiles(),
+                "publishing": store.publishing_status(),
                 "servers": [{"id": server.id, "name": server.name} for server in servers.values()],
                 "public_catalog_enabled": config.launcher_public_catalog_enabled,
                 "download_url": config.launcher_download_url or "https://launcher.monkeyservers.com/",
@@ -50,6 +51,10 @@ def install_launcher_routes(app: FastAPI, config, panel, servers) -> None:
     @admin.post("/profiles/{profile_id}/releases", status_code=201)
     def create_release(profile_id: str, payload: ReleaseSpec, request: Request):
         return store.create_release(profile_id, payload, request.session["username"])
+
+    @admin.get("/profiles/{profile_id}/releases/{version}/changes")
+    def release_changes(profile_id: str, version: str):
+        return store.release_changes(profile_id, version)
 
     @admin.put("/profiles/{profile_id}/publication")
     def publish(profile_id: str, payload: Publication):
