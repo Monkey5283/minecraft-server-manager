@@ -43,6 +43,10 @@ def event_message(event: dict) -> str:
              "Visit the **Lobby** for themed parkour, arcade and arena minigames, seasonal quests, "
              "exploration shops, cosmetics, decorations and holiday music.",
              "**Right-click the event board at spawn or walk into the parkour arch** to get started."]
+    if event["theme"] == "remembrance":
+        lines = ["**Monkeycraft Remembrance — November 11**",
+                 "Join us in the Lobby for a quiet tribute to those we lost, with poppies, candles and a memorial.",
+                 "**Lest we forget.**"]
     if event.get("mode") == "auto":
         lines.append(f"Runs <t:{event['start']}:D> through <t:{event['end_exclusive'] - 1}:D> "
                      f"(event calendar: {event.get('timezone', 'America/Edmonton')}).")
