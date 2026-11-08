@@ -35,6 +35,14 @@ def test_message_explains_gui_access_and_full_christmas_dates():
     assert "enabled by the server team" in event_message(payload)
 
 
+def test_remembrance_announcement_is_a_tribute_without_game_advertising():
+    payload = event()
+    payload.update(theme="remembrance", title="Monkeycraft Remembrance")
+    message = event_message(payload)
+    assert "Lest we forget" in message and "those we lost" in message
+    assert not any(word in message.lower() for word in ("parkour", "games", "cosmetics", "shops", "🎉"))
+
+
 def make_monitor(tmp_path, monkeypatch):
     monkeypatch.setattr("mc_manager.seasonal_events.time.time", lambda: NOW)
     target = RemoteServer(id="lobby", name="Lobby", agent_url="http://agent", token="test")
